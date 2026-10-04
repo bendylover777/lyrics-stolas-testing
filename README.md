@@ -1,7 +1,7 @@
 <div align="center">
 
-# 🎵 Stolas Lyrics
-
+# 🎵!TEST! Stolas Lyrics
+этот репозиторий создан для личного теста
 **Синхронные 3D-тексты песен прямо в мире Minecraft**
 
 ![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1-62B47A?style=for-the-badge)
