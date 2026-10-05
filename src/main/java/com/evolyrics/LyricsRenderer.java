@@ -8,6 +8,11 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 
@@ -231,17 +236,62 @@ public final class LyricsRenderer {
                 }
             }
         }
-        double yaw = Math.toRadians(cam.getYRot() + yawOff);
+        // Keep words out of blocks: shrink the distance (or turn the word a bit) until the path to it is free.
+        double dist0 = st.distance * (0.8 + 0.5 * r3);
+        Minecraft mc = Minecraft.getInstance();
+        Vec3 from = cam.getPosition();
+        double halfWBase = mc.font.width(l.text) * 0.5 * 0.16 * st.size * 1.15 / 9.0 * 1.1;
+        double[] tries = {yawOff, yawOff * 0.5, 0.0, -yawOff, yawOff * 1.6};
+        double bestYaw = yawOff;
+        double bestDist = -1.0;
+        for (double yo : tries) {
+            double d = fitDistance(mc.level, mc.player, cam, from, yo, pitchOff, dist0, halfWBase);
+            if (d > bestDist) {
+                bestDist = d;
+                bestYaw = yo;
+            }
+            if (d >= dist0 * 0.95) break;
+        }
+        double dist = Math.max(0.9, bestDist);
+        double yaw = Math.toRadians(cam.getYRot() + bestYaw);
         double pitch = Math.toRadians(cam.getXRot() + pitchOff);
-        double dist = st.distance * (0.8 + 0.5 * r3);
         double cp = Math.cos(pitch);
-        Vec3 p = cam.getPosition();
-        SX[slot] = p.x - Math.sin(yaw) * cp * dist;
-        SY[slot] = p.y - Math.sin(pitch) * dist;
-        SZ[slot] = p.z + Math.cos(yaw) * cp * dist;
+        SX[slot] = from.x - Math.sin(yaw) * cp * dist;
+        SY[slot] = from.y - Math.sin(pitch) * dist;
+        SZ[slot] = from.z + Math.cos(yaw) * cp * dist;
         DIST[slot] = (float) dist;
         SIZE_MUL[slot] = (float) (0.85 + 0.4 * Math.abs(r4));
         TILT_RND[slot] = (float) r4;
+    }
+
+    /** Distance at which a word of the given half-width fits without touching blocks (3 rays: center, left, right). */
+    private static double fitDistance(Level level, Entity ent, Camera cam, Vec3 from, double yawOff, double pitchOff,
+                                      double dist, double halfWBase) {
+        if (level == null || ent == null) return dist;
+        double yaw = Math.toRadians(cam.getYRot() + yawOff);
+        double pitch = Math.toRadians(cam.getXRot() + pitchOff);
+        double cp = Math.cos(pitch);
+        double dx = -Math.sin(yaw) * cp;
+        double dy = -Math.sin(pitch);
+        double dz = Math.cos(yaw) * cp;
+        double rx = -Math.cos(yaw);
+        double rz = -Math.sin(yaw);
+        double hw = halfWBase * dist;
+        Vec3 target = from.add(dx * dist, dy * dist, dz * dist);
+        double f = clipFactor(level, ent, from, target);
+        f = Math.min(f, clipFactor(level, ent, from, target.add(rx * hw, 0.0, rz * hw)));
+        f = Math.min(f, clipFactor(level, ent, from, target.add(-rx * hw, 0.0, -rz * hw)));
+        return f >= 0.999 ? dist : dist * f * 0.9;
+    }
+
+    /** 1.0 = free path, less = fraction of the path before the first solid block. */
+    private static double clipFactor(Level level, Entity ent, Vec3 from, Vec3 to) {
+        BlockHitResult r = level.clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, ent));
+        if (r.getType() == HitResult.Type.MISS) return 1.0;
+        double full = from.distanceTo(to);
+        if (full < 1.0e-4) return 1.0;
+        double f = r.getLocation().distanceTo(from) / full;
+        return f < 0.0 ? 0.0 : Math.min(f, 1.0);
     }
 
     private static int lastAtOrBefore(List<Song.Line> ls, double t) {
