@@ -103,6 +103,7 @@ public class SettingsScreen extends Screen {
         add(cycle(right, cy + step * 2, colW, "Layout", () -> Settings.POSITIONS[s.position % Settings.POSITIONS.length],
             () -> s.position = (s.position + 1) % Settings.POSITIONS.length));
         add(toggle(right, cy + step * 3, colW, "Through walls", () -> s.throughWalls, v -> s.throughWalls = v));
+        add(new FSlider(right, cy + step * 4, colW, h, "Shimmer speed", 0.2f, 3f, s.shimmerSpeed, 1, v -> s.shimmerSpeed = v));
     }
 
     private void initLook(Settings s, int cy, int step, int h) {
@@ -119,12 +120,14 @@ public class SettingsScreen extends Screen {
         add(new FSlider(right, cy + step * 4, colW, h, "Tilt", 0f, 15f, s.tilt, 1, v -> s.tilt = v));
 
         int next = (preset + 1) % PRESETS.length;
-        add(Button.builder(Component.literal("Color preset: " + PRESET_NAMES[next] + "  (click)"), b -> {
+        add(Button.builder(Component.literal("Preset: " + PRESET_NAMES[next]), b -> {
             preset = next;
             s.textColor = PRESETS[next][0];
             s.glowColor = PRESETS[next][1];
             refresh();
-        }).bounds(left, cy + step * 5, colW * 2 + 8, h).build());
+        }).bounds(left, cy + step * 5, colW, h).build());
+        add(cycle(right, cy + step * 5, colW, "Shimmer", () -> Settings.SHIMMER[s.shimmer % Settings.SHIMMER.length],
+            () -> s.shimmer = (s.shimmer + 1) % Settings.SHIMMER.length));
     }
 
     private void initFont(Settings s, int cy, int step, int h) {
@@ -161,6 +164,7 @@ public class SettingsScreen extends Screen {
         }).bounds(right, cy + step, colW, h).build());
         add(toggle(left, cy + step * 2, colW, "Island", () -> s.island, v -> s.island = v));
         add(toggle(right, cy + step * 2, colW, "Island scroll", () -> s.islandScroll, v -> s.islandScroll = v));
+        add(toggle(left, cy + step * 3, colW, "Island lyrics", () -> s.islandLyrics, v -> s.islandLyrics = v));
     }
 
     private FSlider colorSlider(int x, int y, String label, int shift, boolean text) {
@@ -250,7 +254,7 @@ public class SettingsScreen extends Screen {
         if (tab == 2) {
             g.drawCenteredString(font, "Your own fonts: resource pack -> assets/evolyrics/font/", width / 2, contentTop + 136, 0xFF9A8CC0);
         } else if (tab == 3) {
-            g.drawCenteredString(font, "Songs: .minecraft/config/evolyrics/songs", width / 2, contentTop + 80, 0xFF9A8CC0);
+            g.drawCenteredString(font, "Songs: .minecraft/config/evolyrics/songs", width / 2, contentTop + 96, 0xFF9A8CC0);
         }
         g.pose().popPose();
 

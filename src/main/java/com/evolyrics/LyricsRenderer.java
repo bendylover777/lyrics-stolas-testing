@@ -7,6 +7,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 
@@ -67,6 +68,7 @@ public final class LyricsRenderer {
         int glowRgb = st.glowColor & 0xFFFFFF;
         int coreRgb = mixWhite(rgb, st.neon * 0.4f);
         boolean drew = false;
+        double rt = System.nanoTime() / 1e9;
 
         for (int i = idx, n = 0; i >= 0 && n < SLOTS; i--, n++) {
             Song.Line l = ls.get(i);
@@ -95,11 +97,10 @@ public final class LyricsRenderer {
             float unit = st.size * (DIST[s] / 9f) * SIZE_MUL[s];
             float scale = 0.16f * unit * state.scale;
             Component comp = l.comp(st.font);
-            if (l.width < 0) l.width = font.width(comp);
-            float x = -l.width / 2f;
             float y = -4.5f;
             float rot = state.rot + TILT_RND[s] * st.tilt;
             float pulse = 0.92f + 0.08f * (float) Math.sin(t * 5.0 + i);
+            float spread = 0.9f + st.blur * 1.8f;
 
             ps.pushPose();
             ps.translate(SX[s] - cam.x, SY[s] - cam.y, SZ[s] - cam.z);
@@ -108,44 +109,92 @@ public final class LyricsRenderer {
             if (rot != 0f) ps.mulPose(Axis.ZP.rotationDegrees(rot));
             ps.scale(-scale, -scale, scale);
             Matrix4f m = ps.last().pose();
-
-            // soft glow (two wide rings)
-            if (st.glow > 0.02f) {
-                float spread = 0.9f + st.blur * 1.8f;
-                drawRing(font, comp, x, y, spread * 2.2f, alpha * 0.10f * st.glow, glowRgb, m, buf, mode);
-                drawRing(font, comp, x, y, spread, alpha * 0.20f * st.glow * pulse, glowRgb, m, buf, mode);
-            }
-            // neon tube outline (tight bright ring)
-            if (st.neon > 0.02f) {
-                drawRing(font, comp, x, y, 0.75f, alpha * 0.9f * st.neon * pulse, glowRgb, m, buf, mode);
-            }
             int a = Math.min(255, (int) (alpha * 255f));
-            font.drawInBatch(comp, x, y, (a << 24) | coreRgb, false, m, buf, mode, 0, FULL_BRIGHT);
+
+            if (st.shimmer > 0) {
+                // letters shimmer one by one (enchantment-glint style), no allocations per frame
+                l.buildChars(st.font, font);
+                float bx = -l.textWidth / 2f;
+                if (st.glow > 0.02f) {
+                    int cMid = shimmer(st.shimmer, rgb, glowRgb, rt, st.shimmerSpeed, l.charCount / 2);
+                    drawRing(font, comp, bx, y, spread * 2.2f, alpha * 0.10f * st.glow, cMid, m, buf, mode, 1);
+                    drawRing(font, comp, bx, y, spread, alpha * 0.20f * st.glow * pulse, cMid, m, buf, mode, 1);
+                }
+                for (int k = 0; k < l.charCount; k++) {
+                    float cx = bx + l.charOff[k];
+                    int col = shimmer(st.shimmer, rgb, glowRgb, rt, st.shimmerSpeed, k);
+                    if (st.neon > 0.02f) {
+                        drawRing(font, l.charComps[k], cx, y, 0.75f, alpha * 0.9f * st.neon * pulse, col, m, buf, mode, 2);
+                    }
+                    int core = lerpRgb(coreRgb, col, 0.28f);
+                    font.drawInBatch(l.charComps[k], cx, y, (a << 24) | core, false, m, buf, mode, 0, FULL_BRIGHT);
+                }
+            } else {
+                if (l.width < 0) l.width = font.width(comp);
+                float x = -l.width / 2f;
+                if (st.glow > 0.02f) {
+                    drawRing(font, comp, x, y, spread * 2.2f, alpha * 0.10f * st.glow, glowRgb, m, buf, mode, 1);
+                    drawRing(font, comp, x, y, spread, alpha * 0.20f * st.glow * pulse, glowRgb, m, buf, mode, 1);
+                }
+                if (st.neon > 0.02f) {
+                    drawRing(font, comp, x, y, 0.75f, alpha * 0.9f * st.neon * pulse, glowRgb, m, buf, mode, 1);
+                }
+                font.drawInBatch(comp, x, y, (a << 24) | coreRgb, false, m, buf, mode, 0, FULL_BRIGHT);
+            }
             ps.popPose();
             drew = true;
         }
         if (drew) buf.endBatch();
     }
 
+    /** step 1 = 8 directions (soft glow), step 2 = 4 directions (cheap tight outline). */
     private static void drawRing(Font font, Component comp, float x, float y, float r, float alpha, int rgb,
-                                 Matrix4f m, MultiBufferSource buf, Font.DisplayMode mode) {
+                                 Matrix4f m, MultiBufferSource buf, Font.DisplayMode mode, int step) {
         int a = (int) (alpha * 255f);
         if (a < 4) return;
         if (a > 255) a = 255;
         int color = (a << 24) | rgb;
-        for (int k = 0; k < 8; k++) {
+        for (int k = 0; k < 8; k += step) {
             font.drawInBatch(comp, x + RX[k] * r, y + RY[k] * r, color, false, m, buf, mode, 0, FULL_BRIGHT);
         }
     }
 
     private static int mixWhite(int rgb, float k) {
-        if (k <= 0f) return rgb;
-        if (k > 1f) k = 1f;
-        int r = (rgb >> 16) & 0xFF, g = (rgb >> 8) & 0xFF, b = rgb & 0xFF;
-        r += (int) ((255 - r) * k);
-        g += (int) ((255 - g) * k);
-        b += (int) ((255 - b) * k);
-        return (r << 16) | (g << 8) | b;
+        return lerpRgb(rgb, 0xFFFFFF, k);
+    }
+
+    private static int lerpRgb(int a, int b, float k) {
+        if (k <= 0f) return a;
+        if (k >= 1f) return b;
+        int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+        int br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
+        int r = ar + (int) ((br - ar) * k);
+        int g = ag + (int) ((bg - ag) * k);
+        int bl = ab + (int) ((bb - ab) * k);
+        return (r << 16) | (g << 8) | bl;
+    }
+
+    /** Color of letter #idx at real time rt. 1 = glint sweep, 2 = rainbow, 3 = flow between text and glow color. */
+    private static int shimmer(int mode, int baseRgb, int altRgb, double rt, double speed, int idx) {
+        double ph = rt * speed - idx * 0.11;
+        switch (mode) {
+            case 1: {
+                double v = Math.sin(ph * 2.2) * 0.5 + 0.5;
+                float k = (float) (v * v * v);
+                return lerpRgb(altRgb, 0xFFFFFF, k);
+            }
+            case 2: {
+                double hh = ph * 0.35;
+                float h = (float) (hh - Math.floor(hh));
+                return Mth.hsvToRgb(h, 0.75f, 1f) & 0xFFFFFF;
+            }
+            case 3: {
+                float k = (float) (Math.sin(ph * 1.8) * 0.5 + 0.5);
+                return lerpRgb(baseRgb, altRgb, k);
+            }
+            default:
+                return altRgb;
+        }
     }
 
     /** New line appears inside the camera's field of view (works in 1st and 3rd person: based on the camera). */

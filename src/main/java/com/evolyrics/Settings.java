@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 public final class Settings {
+    public static final String[] SHIMMER = {"Off", "Glint", "Rainbow", "Flow"};
     public static final String[] POSITIONS = {"Field of view", "Center", "Top", "Bottom"};
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     public static Settings I = new Settings();
@@ -37,6 +38,9 @@ public final class Settings {
     public float neon = 0.8f;
     public float tilt = 5.0f;
     public boolean islandScroll = true;
+    public boolean islandLyrics = true;
+    public int shimmer = 1;
+    public float shimmerSpeed = 1.0f;
 
     public LyricEffect in() {
         LyricEffect e = LyricEffect.parse(inEffect);
