@@ -5,23 +5,26 @@ import com.mojang.math.Axis;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
-import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Random;
 
-/** Renders lyrics as billboarded text in the world. No per-frame allocations. */
+/** Renders lyrics as billboarded neon text in front of the camera. No per-frame allocations. */
 public final class LyricsRenderer {
     private static final int SLOTS = 8;
     private static final float IN_DUR = 0.35f;
     private static final float OUT_DUR = 0.4f;
     private static final int FULL_BRIGHT = 15728880;
+    private static final int[] CELL_ORDER = {4, 0, 8, 2, 6, 5, 3, 1, 7};
 
     private static final double[] SX = new double[SLOTS], SY = new double[SLOTS], SZ = new double[SLOTS];
+    private static final float[] DIST = new float[SLOTS], SIZE_MUL = new float[SLOTS], TILT_RND = new float[SLOTS];
     private static final int[] SLOT_LINE = new int[SLOTS];
     private static final int[] SLOT_GEN = new int[SLOTS];
     private static final LyricEffect.State STATE = new LyricEffect.State();
@@ -32,6 +35,8 @@ public final class LyricsRenderer {
     static {
         Arrays.fill(SLOT_LINE, -1);
         Arrays.fill(SLOT_GEN, -1);
+        Arrays.fill(DIST, 5f);
+        Arrays.fill(SIZE_MUL, 1f);
         for (int i = 0; i < 8; i++) {
             double a = i * Math.PI / 4.0;
             RX[i] = (float) Math.cos(a);
@@ -47,8 +52,7 @@ public final class LyricsRenderer {
         Song song = Playback.current;
         if (!st.enabled || song == null || song.lyrics.isEmpty()) return;
         Minecraft mc = Minecraft.getInstance();
-        LocalPlayer player = mc.player;
-        if (player == null) return;
+        if (mc.player == null) return;
 
         double t = Playback.position() + st.syncOffset;
         List<Song.Line> ls = song.lyrics;
@@ -59,7 +63,9 @@ public final class LyricsRenderer {
         Font font = mc.font;
         MultiBufferSource.BufferSource buf = mc.renderBuffers().bufferSource();
         Font.DisplayMode mode = st.throughWalls ? Font.DisplayMode.SEE_THROUGH : Font.DisplayMode.NORMAL;
-        float unit = st.size * (st.distance / 9f);
+        int rgb = st.textColor & 0xFFFFFF;
+        int glowRgb = st.glowColor & 0xFFFFFF;
+        int coreRgb = mixWhite(rgb, st.neon * 0.4f);
         boolean drew = false;
 
         for (int i = idx, n = 0; i >= 0 && n < SLOTS; i--, n++) {
@@ -76,12 +82,6 @@ public final class LyricsRenderer {
                 SLOT_GEN[s] = Playback.generation;
             }
 
-            if (l.fontIdx != st.font) {
-                l.comp = Song.makeComp(l.text, st.font);
-                l.fontIdx = st.font;
-                l.width = -1;
-            }
-
             LyricEffect inFx = l.inFx != null ? l.inFx : st.in();
             LyricEffect outFx = l.outFx != null ? l.outFx : st.out();
             LyricEffect.State state = STATE;
@@ -92,113 +92,107 @@ public final class LyricsRenderer {
             float alpha = state.alpha * st.opacity;
             if (alpha < 0.03f) continue; // Font treats alpha < 4/255 as opaque
 
+            float unit = st.size * (DIST[s] / 9f) * SIZE_MUL[s];
             float scale = 0.16f * unit * state.scale;
-            if (l.width < 0) l.width = font.width(l.comp);
+            Component comp = l.comp(st.font);
+            if (l.width < 0) l.width = font.width(comp);
             float x = -l.width / 2f;
             float y = -4.5f;
+            float rot = state.rot + TILT_RND[s] * st.tilt;
+            float pulse = 0.92f + 0.08f * (float) Math.sin(t * 5.0 + i);
 
             ps.pushPose();
             ps.translate(SX[s] - cam.x, SY[s] - cam.y, SZ[s] - cam.z);
             ps.mulPose(camera.rotation());
             ps.translate(-state.dx * unit, state.dy * unit, 0.0);
-            if (state.rot != 0f) ps.mulPose(Axis.ZP.rotationDegrees(state.rot));
+            if (rot != 0f) ps.mulPose(Axis.ZP.rotationDegrees(rot));
             ps.scale(-scale, -scale, scale);
             Matrix4f m = ps.last().pose();
 
-            // glow + blur halo (two rings)
+            // soft glow (two wide rings)
             if (st.glow > 0.02f) {
-                float spread = 0.8f + st.blur * 2.2f;
-                int grgb = st.glowRgb(t, i);
-                drawRing(font, l, x, y, spread, alpha * 0.20f * st.glow, grgb, m, buf, mode);
-                drawRing(font, l, x, y, spread * 2f, alpha * 0.09f * st.glow, grgb, m, buf, mode);
+                float spread = 0.9f + st.blur * 1.8f;
+                drawRing(font, comp, x, y, spread * 2.2f, alpha * 0.10f * st.glow, glowRgb, m, buf, mode);
+                drawRing(font, comp, x, y, spread, alpha * 0.20f * st.glow * pulse, glowRgb, m, buf, mode);
+            }
+            // neon tube outline (tight bright ring)
+            if (st.neon > 0.02f) {
+                drawRing(font, comp, x, y, 0.75f, alpha * 0.9f * st.neon * pulse, glowRgb, m, buf, mode);
             }
             int a = Math.min(255, (int) (alpha * 255f));
-            font.drawInBatch(l.comp, x, y, (a << 24) | st.textRgb(t, i), st.shadow, m, buf, mode, 0, FULL_BRIGHT);
+            font.drawInBatch(comp, x, y, (a << 24) | coreRgb, false, m, buf, mode, 0, FULL_BRIGHT);
             ps.popPose();
             drew = true;
         }
         if (drew) buf.endBatch();
     }
 
-    private static void drawRing(Font font, Song.Line l, float x, float y, float r, float alpha, int rgb,
+    private static void drawRing(Font font, Component comp, float x, float y, float r, float alpha, int rgb,
                                  Matrix4f m, MultiBufferSource buf, Font.DisplayMode mode) {
         int a = (int) (alpha * 255f);
         if (a < 4) return;
-        int color = (Math.min(a, 255) << 24) | (rgb & 0xFFFFFF);
+        if (a > 255) a = 255;
+        int color = (a << 24) | rgb;
         for (int k = 0; k < 8; k++) {
-            font.drawInBatch(l.comp, x + RX[k] * r, y + RY[k] * r, color, false, m, buf, mode, 0, FULL_BRIGHT);
+            font.drawInBatch(comp, x + RX[k] * r, y + RY[k] * r, color, false, m, buf, mode, 0, FULL_BRIGHT);
         }
     }
 
+    private static int mixWhite(int rgb, float k) {
+        if (k <= 0f) return rgb;
+        if (k > 1f) k = 1f;
+        int r = (rgb >> 16) & 0xFF, g = (rgb >> 8) & 0xFF, b = rgb & 0xFF;
+        r += (int) ((255 - r) * k);
+        g += (int) ((255 - g) * k);
+        b += (int) ((255 - b) * k);
+        return (r << 16) | (g << 8) | b;
+    }
+
+    /** New line appears inside the camera's field of view (works in 1st and 3rd person: based on the camera). */
     private static void spawn(int slot, int lineIndex, Camera cam, Song.Line l, Settings st) {
         RND.setSeed(lineIndex * 7919L + 13L);
         double r1 = RND.nextDouble() * 2 - 1;
         double r2 = RND.nextDouble() * 2 - 1;
-        String pos = l.position == null ? "" : l.position.toLowerCase(java.util.Locale.ROOT);
-        double yawOff = 0;
-        double pitchOff = 0; // degrees, negative = up (view mode)
-        double yOff = 0;     // blocks (legacy "around" mode)
-
-        if (st.inView) {
-            // words appear inside the field of view, alternating left/right and up/down
-            double sx = (lineIndex & 1) == 0 ? -1 : 1;
-            double sy = ((lineIndex >> 1) & 1) == 0 ? -1 : 1;
-            double yawSpan = 10 + st.scatter * 32;
-            double pitchSpan = 5 + st.scatter * 14;
-            yawOff = sx * (0.35 + 0.65 * Math.abs(r1)) * yawSpan;
-            pitchOff = sy * (0.25 + 0.75 * Math.abs(r2)) * pitchSpan;
-            String mode = pos;
-            if (mode.isEmpty()) {
-                if (st.position == 1) mode = "center";
-                else if (st.position == 2) mode = "top";
-                else if (st.position == 3) mode = "bottom";
-            }
-            if (mode.equals("left")) {
-                yawOff = -Math.abs(yawOff) - 6;
-                pitchOff *= 0.3;
-            } else if (mode.equals("right")) {
-                yawOff = Math.abs(yawOff) + 6;
-                pitchOff *= 0.3;
-            } else if (mode.equals("center")) {
-                yawOff = r1 * 6;
-                pitchOff = r2 * 4;
-            } else if (mode.equals("top")) {
-                pitchOff = -Math.abs(pitchOff) - 6;
-                yawOff *= 0.6;
-            } else if (mode.equals("bottom")) {
-                pitchOff = Math.abs(pitchOff) + 4;
-                yawOff *= 0.6;
-            }
-        } else {
-            switch (pos) {
-                case "left" -> { yawOff = -40; yOff = 0.2; }
-                case "right" -> { yawOff = 40; yOff = 0.2; }
-                case "center" -> { yawOff = 0; yOff = 0.2; }
-                case "top" -> { yawOff = r1 * 25; yOff = 2.2; }
-                case "bottom" -> { yawOff = r1 * 25; yOff = -1.4; }
-                case "random" -> { yawOff = r1 * 110; yOff = r2 * 1.8; }
-                default -> {
-                    switch (st.position) {
-                        case 1 -> { yawOff = 0; yOff = 0.2; }
-                        case 2 -> { yawOff = r1 * st.scatter * 60; yOff = 2.2; }
-                        case 3 -> { yawOff = r1 * st.scatter * 60; yOff = -1.4; }
-                        default -> { yawOff = r1 * st.scatter * 100; yOff = r2 * st.scatter * 1.6 - 0.1; }
+        double r3 = RND.nextDouble();
+        double r4 = RND.nextDouble() * 2 - 1;
+        double spreadH = 12.0 + st.scatter * 38.0;
+        double spreadV = 6.0 + st.scatter * 14.0;
+        double yawOff;
+        double pitchOff;
+        String pos = l.position == null ? "" : l.position.toLowerCase(Locale.ROOT);
+        switch (pos) {
+            case "left" -> { yawOff = -spreadH; pitchOff = 0; }
+            case "right" -> { yawOff = spreadH; pitchOff = 0; }
+            case "center" -> { yawOff = 0; pitchOff = 0; }
+            case "top" -> { yawOff = r1 * spreadH * 0.5; pitchOff = -spreadV; }
+            case "bottom" -> { yawOff = r1 * spreadH * 0.5; pitchOff = spreadV; }
+            case "random" -> { yawOff = r1 * spreadH; pitchOff = r2 * spreadV; }
+            default -> {
+                switch (st.position) {
+                    case 1 -> { yawOff = 0; pitchOff = 0; }
+                    case 2 -> { yawOff = r1 * spreadH * 0.5; pitchOff = -spreadV; }
+                    case 3 -> { yawOff = r1 * spreadH * 0.5; pitchOff = spreadV; }
+                    default -> {
+                        int cell = CELL_ORDER[Math.floorMod(lineIndex, 9)];
+                        int col = cell % 3 - 1;
+                        int row = cell / 3 - 1;
+                        yawOff = col * spreadH * 0.66 + r1 * spreadH * 0.28;
+                        pitchOff = row * spreadV * 0.66 + r2 * spreadV * 0.28;
                     }
                 }
             }
         }
-
-        // origin = camera, so it also works in third person
-        double pitchDeg = st.inView ? cam.getXRot() + pitchOff : 0.0;
-        if (pitchDeg > 75.0) pitchDeg = 75.0;
-        if (pitchDeg < -75.0) pitchDeg = -75.0;
         double yaw = Math.toRadians(cam.getYRot() + yawOff);
-        double pitch = Math.toRadians(pitchDeg);
+        double pitch = Math.toRadians(cam.getXRot() + pitchOff);
+        double dist = st.distance * (0.8 + 0.5 * r3);
         double cp = Math.cos(pitch);
-        Vec3 c = cam.getPosition();
-        SX[slot] = c.x - Math.sin(yaw) * cp * st.distance;
-        SY[slot] = c.y - Math.sin(pitch) * st.distance + yOff;
-        SZ[slot] = c.z + Math.cos(yaw) * cp * st.distance;
+        Vec3 p = cam.getPosition();
+        SX[slot] = p.x - Math.sin(yaw) * cp * dist;
+        SY[slot] = p.y - Math.sin(pitch) * dist;
+        SZ[slot] = p.z + Math.cos(yaw) * cp * dist;
+        DIST[slot] = (float) dist;
+        SIZE_MUL[slot] = (float) (0.85 + 0.4 * Math.abs(r4));
+        TILT_RND[slot] = (float) r4;
     }
 
     private static int lastAtOrBefore(List<Song.Line> ls, double t) {

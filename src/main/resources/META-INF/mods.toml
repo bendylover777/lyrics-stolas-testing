@@ -5,9 +5,9 @@ license="MIT"
 [[mods]]
 modId="evolyrics"
 version="1.0.0"
-displayName="EvoLyrics"
+displayName="Stolas Lyrics"
 displayTest="IGNORE_ALL_VERSION"
-description='''Synced 3D lyrics rendered inside the Minecraft world. Client-side only.'''
+description='''Synced neon 3D lyrics rendered inside the Minecraft world. Client-side only.'''
 
 [[dependencies.evolyrics]]
 modId="forge"

@@ -1,0 +1,7 @@
+StolasLyrics update (neon, tilt, marquee island, new menu, text in view)
+
+1. Распакуй этот архив.
+2. На GitHub в репозитории: Add file -> Upload files.
+3. Перетащи в окно папку "src" целиком (она заменит старые файлы).
+4. Нажми Commit changes.
+5. Открой вкладку Actions, дождись зелёной галочки, скачай новый jar из Artifacts.
