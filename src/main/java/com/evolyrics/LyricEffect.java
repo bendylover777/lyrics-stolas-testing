@@ -5,7 +5,7 @@ import java.util.Locale;
 public enum LyricEffect {
     FADE("Fade"), RISE("Rise"), SCALE_IN("Scale In"), SCALE_OUT("Scale Out"),
     SLIDE_LEFT("Slide Left"), SLIDE_RIGHT("Slide Right"), POP("Pop"), FLOAT("Float"), ROTATE("Rotate"),
-    DROP("Drop"), BOUNCE("Bounce"), WAVE("Wave"), SHAKE("Shake"), GLITCH("Glitch"), TYPEWRITER("Typewriter");
+    BLUR("Blur"), GLITCH("Glitch"), TYPE("Type"), WAVE("Wave"), DROP("Drop");
 
     public final String label;
 
@@ -15,10 +15,20 @@ public enum LyricEffect {
 
     /** Reusable mutable state: nothing is allocated per frame. dx>0 = right, dy>0 = up (in blocks). */
     public static final class State {
-        public float alpha, scale, dx, dy, rot, reveal;
+        public float alpha, scale, dx, dy, rot;
+        public float blur;      // 0..1 extra soft halo, text slightly dissolved
+        public float glitch;    // 0..1 RGB-split jitter
+        public float wave;      // >0 letters bob in a wave
+        public float reveal;    // 0..1 fraction of letters shown (typewriter)
 
         public void reset() {
-            alpha = 1f; scale = 1f; dx = 0f; dy = 0f; rot = 0f; reveal = 1f;
+            alpha = 1f; scale = 1f; dx = 0f; dy = 0f; rot = 0f;
+            blur = 0f; glitch = 0f; wave = 0f; reveal = 1f;
+        }
+
+        /** True when the letters must be drawn one by one. */
+        public boolean needsLetters() {
+            return glitch > 0.01f || wave > 0f || reveal < 0.999f;
         }
     }
 
@@ -48,25 +58,19 @@ public enum LyricEffect {
         return 1f + c3 * q * q * q + c1 * q * q;
     }
 
-    private static float bounceOut(float p) {
+    private static float easeBounce(float x) {
         float n1 = 7.5625f, d1 = 2.75f;
-        if (p < 1f / d1) return n1 * p * p;
-        if (p < 2f / d1) {
-            p -= 1.5f / d1;
-            return n1 * p * p + 0.75f;
+        if (x < 1f / d1) return n1 * x * x;
+        if (x < 2f / d1) {
+            x -= 1.5f / d1;
+            return n1 * x * x + 0.75f;
         }
-        if (p < 2.5f / d1) {
-            p -= 2.25f / d1;
-            return n1 * p * p + 0.9375f;
+        if (x < 2.5f / d1) {
+            x -= 2.25f / d1;
+            return n1 * x * x + 0.9375f;
         }
-        p -= 2.625f / d1;
-        return n1 * p * p + 0.984375f;
-    }
-
-    private static float jitter(float p, int salt) {
-        int h = (int) (p * 24f) * 73856093 ^ salt * 19349663;
-        h ^= h >>> 13;
-        return ((h & 1023) / 1023f) - 0.5f;
+        x -= 2.625f / d1;
+        return n1 * x * x + 0.984375f;
     }
 
     /** p: 0..1 appear progress (stays 1 while the line is shown). */
@@ -92,30 +96,25 @@ public enum LyricEffect {
                 s.rot = -(1f - e) * 70f;
                 s.scale = 0.6f + 0.4f * e;
             }
-            case DROP -> {
-                s.alpha = Math.min(1f, p * 4f);
-                s.dy = (1f - bounceOut(p)) * 1.3f;
-            }
-            case BOUNCE -> {
-                s.alpha = Math.min(1f, p * 3f);
-                s.scale = 0.4f + 0.6f * bounceOut(p);
-            }
-            case WAVE -> {
-                s.dy = -(1f - e) * 0.5f + (float) Math.sin(time * 3.2) * 0.07f;
-                s.rot = (float) Math.sin(time * 2.4) * 2.5f;
-            }
-            case SHAKE -> {
-                s.alpha = Math.min(1f, p * 3f);
-                s.dx = (1f - p) * (float) Math.sin(p * 45.0) * 0.3f;
+            case BLUR -> {
+                s.blur = 1f - e;
+                s.scale = 1.12f - 0.12f * e;
             }
             case GLITCH -> {
-                s.dx = (1f - p) * jitter(p, 1) * 1.2f;
-                s.dy = (1f - p) * jitter(p, 2) * 0.5f;
-                s.scale = 1f + (1f - p) * jitter(p, 3) * 0.4f;
+                s.alpha = Math.min(1f, p * 3f);
+                s.glitch = Math.max(1f - p, Math.sin(time * 11.0) > 0.93 ? 0.8f : 0f);
             }
-            case TYPEWRITER -> {
-                s.alpha = Math.min(1f, p * 6f);
+            case TYPE -> {
+                s.alpha = Math.min(1f, p * 5f);
                 s.reveal = p;
+            }
+            case WAVE -> {
+                s.wave = 1f;
+                s.dy = -(1f - e) * 0.3f;
+            }
+            case DROP -> {
+                s.alpha = Math.min(1f, p * 4f);
+                s.dy = (1f - easeBounce(p)) * 1.3f;
             }
         }
     }
@@ -137,15 +136,14 @@ public enum LyricEffect {
                 s.rot += e * 70f;
                 s.scale *= 1f - 0.4f * e;
             }
-            case DROP -> s.dy -= e * 1.0f;
-            case BOUNCE -> s.scale *= 1f - 0.6f * e;
-            case WAVE -> s.dy += e * 0.5f;
-            case SHAKE -> s.dx += (float) Math.sin(p * 40.0) * 0.2f * e;
-            case GLITCH -> {
-                s.dx += jitter(p, 4) * 1.0f * e;
-                s.scale *= 1f - 0.2f * e;
+            case BLUR -> s.blur = e;
+            case GLITCH -> s.glitch = p;
+            case TYPE -> s.reveal = 1f - p;
+            case WAVE -> {
+                s.wave = 1f;
+                s.dy += e * 0.4f;
             }
-            case TYPEWRITER -> { }
+            case DROP -> s.dy -= e * 1.1f;
         }
     }
 }

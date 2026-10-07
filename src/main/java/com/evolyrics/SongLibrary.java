@@ -21,6 +21,15 @@ public final class SongLibrary {
         return dir().resolve("songs");
     }
 
+    /** Same folder naming as the Python bridge: "Artist - Title" without forbidden characters. */
+    public static String safeName(String title, String artist) {
+        String t = artist == null || artist.isBlank() ? title : artist + " - " + title;
+        t = t.replaceAll("[\\\\/:*?\"<>|]", "").trim();
+        while (t.endsWith(".")) t = t.substring(0, t.length() - 1).trim();
+        if (t.length() > 80) t = t.substring(0, 80);
+        return t.isEmpty() ? "unknown" : t;
+    }
+
     public static Path fileOf(Song s) {
         return songsDir().resolve(s.id).resolve("lyrics.json");
     }

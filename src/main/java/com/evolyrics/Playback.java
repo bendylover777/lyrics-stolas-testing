@@ -7,16 +7,15 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * Playback clock. Two sources:
+ * Playback clock. Sources:
  *  - manual (commands / menu)
- *  - bridge: an external program writes config/evolyrics/bridge.json
+ *  - built-in bridge (SystemBridge asks the OS what is playing, calls external())
+ *  - file bridge: an external program writes config/evolyrics/bridge.json
  *    {"title":"..","artist":"..","position_ms":84320,"playing":true}
  */
 public final class Playback {
     public static Song current;
     public static int generation = 0;
-    /** True while bridge.json is being updated (the bridge program is alive). */
-    public static boolean bridgeFresh = false;
 
     private static boolean playing;
     private static double basePos;
@@ -75,38 +74,34 @@ public final class Playback {
         generation++;
     }
 
-    /** Called every client tick. */
+    /** An external source (built-in bridge / file bridge) says: this song, this position, playing or not. */
+    public static void external(Song s, double np, boolean pl) {
+        boolean changed = s != current;
+        if (changed) {
+            current = s;
+            generation++;
+        }
+        double ext = position();
+        if (changed || pl != playing || Math.abs(np - ext) > 0.15) {
+            if (Math.abs(np - ext) > 1.0) generation++;
+            basePos = np;
+            baseNanos = System.nanoTime();
+        }
+        playing = pl;
+    }
+
+    /** Called every client tick. Only the file bridge is polled here. */
     public static void tick() {
-        if (!Settings.I.useBridge) return;
+        if (Settings.I.source != 2) return;
         if (++bridgeTick < 5) return;
         bridgeTick = 0;
         Path f = SongLibrary.dir().resolve("bridge.json");
-        if (!Files.isRegularFile(f)) {
-            bridgeFresh = false;
-            return;
-        }
-        try {
-            bridgeFresh = System.currentTimeMillis() - Files.getLastModifiedTime(f).toMillis() < 4000L;
-        } catch (Exception ignored) {
-            bridgeFresh = false;
-        }
+        if (!Files.isRegularFile(f)) return;
         try (var r = Files.newBufferedReader(f, StandardCharsets.UTF_8)) {
             Bridge b = GSON.fromJson(r, Bridge.class);
             if (b == null) return;
             Song s = SongLibrary.findByTitle(b.title, b.artist);
-            boolean changed = s != current;
-            if (changed) {
-                current = s;
-                generation++;
-            }
-            double np = b.position_ms / 1000.0;
-            double ext = position();
-            if (changed || b.playing != playing || Math.abs(np - ext) > 0.15) {
-                if (Math.abs(np - ext) > 1.0) generation++;
-                basePos = np;
-                baseNanos = System.nanoTime();
-            }
-            playing = b.playing;
+            external(s, b.position_ms / 1000.0, b.playing);
         } catch (Exception ignored) {
         }
     }

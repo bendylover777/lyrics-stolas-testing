@@ -2,8 +2,10 @@ package com.evolyrics;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import net.minecraft.ChatFormatting;
+import net.minecraft.client.gui.Font;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.Style;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.ResourceLocation;
 
 import java.io.IOException;
@@ -13,6 +15,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 
 /** One song = one lyrics.json. Editable at runtime (editor-ready): addLine/prepare/save. */
 public class Song {
@@ -33,9 +36,58 @@ public class Song {
 
         public transient double end;
         public transient Component comp;
+        public transient String compFont;
         public transient int width = -1;
-        public transient int fontIdx = -1;
         public transient LyricEffect inFx, outFx;
+        public transient Component[] charComps;
+        public transient int[] charOff;
+        public transient int charCount;
+        public transient int textWidth = -1;
+        public transient String charFont;
+
+        private Component styled(String s, String font) {
+            ResourceLocation rl = (font == null || font.isEmpty()) ? null : ResourceLocation.tryParse(font);
+            MutableComponent c = Component.literal(s);
+            if (rl != null) {
+                return c.withStyle(st -> st.withFont(rl));
+            }
+            return c.withStyle(ChatFormatting.BOLD);
+        }
+
+        /** Cached styled text for the chosen font (rebuilt only when the font changes). */
+        public Component comp(String font) {
+            if (comp == null || !Objects.equals(compFont, font)) {
+                compFont = font;
+                width = -1;
+                comp = styled(text, font);
+            }
+            return comp;
+        }
+
+        /** Per-letter components + x offsets (for shimmering letters). Rebuilt only when the font changes. */
+        public void buildChars(String font, Font mcFont) {
+            if (charComps != null && textWidth >= 0 && Objects.equals(charFont, font)) return;
+            charFont = font;
+            int n = text.codePointCount(0, text.length());
+            Component[] comps = new Component[n];
+            int[] offs = new int[n];
+            int x = 0;
+            int k = 0;
+            int i = 0;
+            while (i < text.length()) {
+                int cp = text.codePointAt(i);
+                i += Character.charCount(cp);
+                Component c = styled(new String(Character.toChars(cp)), font);
+                comps[k] = c;
+                offs[k] = x;
+                x += mcFont.width(c);
+                k++;
+            }
+            charComps = comps;
+            charOff = offs;
+            charCount = n;
+            textWidth = x;
+        }
     }
 
     public void prepare() {
@@ -48,24 +100,13 @@ public class Song {
             l.end = l.time + d;
             l.inFx = LyricEffect.parse(l.effect);
             l.outFx = LyricEffect.parse(l.out);
-            l.comp = makeComp(l.text, Settings.I.font);
-            l.fontIdx = Settings.I.font;
+            l.comp = null;
+            l.compFont = null;
             l.width = -1;
+            l.charComps = null;
+            l.charFont = null;
+            l.textWidth = -1;
         }
-    }
-
-    /** Builds the text component in the currently selected font. */
-    /** Style of the currently selected font (bold only where it makes sense). */
-    public static Style makeStyle(int fontIdx) {
-        int i = Math.floorMod(fontIdx, Settings.FONT_IDS.length);
-        Style style = Style.EMPTY.withBold(Settings.FONT_BOLD[i]);
-        if (Settings.FONT_IDS[i] != null) style = style.withFont(new ResourceLocation(Settings.FONT_IDS[i]));
-        return style;
-    }
-
-    /** Builds the text component in the currently selected font. */
-    public static Component makeComp(String text, int fontIdx) {
-        return Component.literal(text).withStyle(makeStyle(fontIdx));
     }
 
     public Line addLine(double time, String text, String effect) {
