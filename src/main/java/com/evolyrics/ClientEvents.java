@@ -4,7 +4,6 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
-import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
@@ -35,6 +34,7 @@ public final class ClientEvents {
         @SubscribeEvent
         public static void overlays(RegisterGuiOverlaysEvent e) {
             e.registerAboveAll("island", Island::render);
+            e.registerAboveAll("status", StatusHud::render);
         }
 
         @SubscribeEvent
@@ -68,12 +68,7 @@ public final class ClientEvents {
         @SubscribeEvent
         public static void commands(RegisterClientCommandsEvent e) {
             CommandDispatcher<CommandSourceStack> d = e.getDispatcher();
-            d.register(root("stolaslyrics"));
-            d.register(root("evolyrics"));
-        }
-
-        private static LiteralArgumentBuilder<CommandSourceStack> root(String name) {
-            return Commands.literal(name)
+            d.register(Commands.literal("stolaslyrics")
                 .then(Commands.literal("list").executes(c -> {
                     say(c, "Songs: " + String.join(", ", SongLibrary.songs.keySet()));
                     return 1;
@@ -114,6 +109,7 @@ public final class ClientEvents {
                         Playback.seek(DoubleArgumentType.getDouble(c, "seconds"));
                         return 1;
                     })))
+                // Mini-editor: /evolyrics add <effect> <text>  -> adds a line at the current time and saves
                 .then(Commands.literal("add").then(Commands.argument("effect", StringArgumentType.word())
                     .suggests((c, b) -> {
                         for (LyricEffect fx : LyricEffect.values()) b.suggest(fx.name().toLowerCase());
@@ -134,7 +130,8 @@ public final class ClientEvents {
                             say(c, "Save failed: " + ex.getMessage());
                         }
                         return 1;
-                    }))));
+                    }))))
+            );
         }
 
         private static void say(CommandContext<CommandSourceStack> c, String msg) {

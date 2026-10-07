@@ -15,6 +15,8 @@ import java.nio.file.Path;
 public final class Playback {
     public static Song current;
     public static int generation = 0;
+    /** True while bridge.json is being updated (the bridge program is alive). */
+    public static boolean bridgeFresh = false;
 
     private static boolean playing;
     private static double basePos;
@@ -79,7 +81,15 @@ public final class Playback {
         if (++bridgeTick < 5) return;
         bridgeTick = 0;
         Path f = SongLibrary.dir().resolve("bridge.json");
-        if (!Files.isRegularFile(f)) return;
+        if (!Files.isRegularFile(f)) {
+            bridgeFresh = false;
+            return;
+        }
+        try {
+            bridgeFresh = System.currentTimeMillis() - Files.getLastModifiedTime(f).toMillis() < 4000L;
+        } catch (Exception ignored) {
+            bridgeFresh = false;
+        }
         try (var r = Files.newBufferedReader(f, StandardCharsets.UTF_8)) {
             Bridge b = GSON.fromJson(r, Bridge.class);
             if (b == null) return;
