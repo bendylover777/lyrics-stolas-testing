@@ -14,7 +14,7 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 public class SettingsScreen extends Screen {
-    private static final String[] TABS = {"Lyrics", "Look", "Font", "Music"};
+    private static final String[] TABS = {"Lyrics", "Look", "Anim", "Font", "Music"};
     private static final String[] PRESET_NAMES = {"Ice", "Pink", "Violet", "Gold", "Mint", "Pure white"};
     private static final int[][] PRESETS = {
         {0xFFFFFF, 0x7FA8FF}, {0xFFFFFF, 0xFF7ACB}, {0xF2E8FF, 0xA855F7},
@@ -28,8 +28,9 @@ public class SettingsScreen extends Screen {
 
     private final Screen parent;
     private final long tabStart;
-    private final List<AbstractWidget> ws = new ArrayList<>();
-    private int top, bottom, left, right, colW, contentTop;
+    private final List<AbstractWidget> content = new ArrayList<>();
+    private final List<AbstractWidget> header = new ArrayList<>();
+    private int panelTop, tabsY, bottom, left, right, colW, contentTop;
 
     public SettingsScreen(Screen parent) {
         super(Component.literal("Stolas Lyrics"));
@@ -54,8 +55,14 @@ public class SettingsScreen extends Screen {
     }
 
     private <T extends AbstractWidget> T add(T w) {
-        ws.add(w);
+        content.add(w);
         return addRenderableWidget(w);
+    }
+
+    /** Header widgets (tabs, Done) are drawn by hand so they do not slide with the content. */
+    private <T extends AbstractWidget> T addHeader(T w) {
+        header.add(w);
+        return addWidget(w);
     }
 
     @Override
@@ -65,29 +72,30 @@ public class SettingsScreen extends Screen {
         int gap = 8, h = 20, step = 22;
         left = width / 2 - colW - gap / 2;
         right = width / 2 + gap / 2;
-        int y0 = Math.max(34, height / 2 - 100);
-        top = y0;
+        panelTop = Math.max(4, (height - 230) / 2);
+        tabsY = panelTop + 56;
 
-        int tw = (colW * 2 + gap - 3 * 4) / 4;
+        int x2 = width / 2 + 168;
+        addHeader(Button.builder(Component.literal("Done"), b -> onClose())
+            .bounds(x2 - 8 - 46, panelTop + 4, 46, 14).build());
+
+        int tw = (colW * 2 + gap - (TABS.length - 1) * 4) / TABS.length;
         for (int i = 0; i < TABS.length; i++) {
             final int idx = i;
-            add(Button.builder(Component.literal(TABS[i]), b -> openTab(idx))
-                .bounds(left + i * (tw + 4), y0, tw, h).build());
+            addHeader(Button.builder(Component.literal(TABS[i]), b -> openTab(idx))
+                .bounds(left + i * (tw + 4), tabsY, tw, h).build());
         }
 
-        int cy = y0 + 28;
+        int cy = tabsY + 28;
         contentTop = cy;
         switch (tab) {
             case 0 -> initLyrics(s, cy, step, h);
-            case 1 -> initLook(s, cy + 8, step, h);
-            case 2 -> initFont(s, cy, step, h);
+            case 1 -> initLook(s, cy, step, h);
+            case 2 -> initAnim(s, cy, step, h);
+            case 3 -> initFont(s, cy, step, h);
             default -> initMusic(s, cy, step, h);
         }
-
-        int doneY = y0 + 28 + 8 + step * 6 + 6;
-        bottom = doneY + 30;
-        add(Button.builder(Component.literal("Done"), b -> onClose())
-            .bounds(width / 2 - 60, doneY, 120, h).build());
+        bottom = cy + step * 6 + 14;
     }
 
     private void initLyrics(Settings s, int cy, int step, int h) {
@@ -98,13 +106,9 @@ public class SettingsScreen extends Screen {
         add(new FSlider(left, cy + step * 4, colW, h, "Opacity", 0.1f, 1f, s.opacity, 2, v -> s.opacity = v));
         add(new FSlider(left, cy + step * 5, colW, h, "Sync offset", -3f, 3f, s.syncOffset, 2, v -> s.syncOffset = v));
 
-        add(cycle(right, cy, colW, "In effect", () -> s.in().label, () -> s.inEffect = s.in().next().name()));
-        add(cycle(right, cy + step, colW, "Out effect", () -> s.out().label, () -> s.outEffect = s.out().next().name()));
-        add(cycle(right, cy + step * 2, colW, "Layout", () -> Settings.POSITIONS[s.position % Settings.POSITIONS.length],
+        add(cycle(right, cy, colW, "Layout", () -> Settings.POSITIONS[s.position % Settings.POSITIONS.length],
             () -> s.position = (s.position + 1) % Settings.POSITIONS.length));
-        add(toggle(right, cy + step * 3, colW, "Through walls", () -> s.throughWalls, v -> s.throughWalls = v));
-        add(new FSlider(right, cy + step * 4, colW, h, "Shimmer speed", 0.2f, 3f, s.shimmerSpeed, 1, v -> s.shimmerSpeed = v));
-        add(new FSlider(right, cy + step * 5, colW, h, "Glint brightness", 0f, 3f, s.glint, 1, v -> s.glint = v));
+        add(toggle(right, cy + step, colW, "Through walls", () -> s.throughWalls, v -> s.throughWalls = v));
     }
 
     private void initLook(Settings s, int cy, int step, int h) {
@@ -118,7 +122,6 @@ public class SettingsScreen extends Screen {
         add(new FSlider(left, cy + step * 3, colW, h, "Neon", 0f, 1f, s.neon, 2, v -> s.neon = v));
         add(new FSlider(right, cy + step * 3, colW, h, "Glow", 0f, 1f, s.glow, 2, v -> s.glow = v));
         add(new FSlider(left, cy + step * 4, colW, h, "Blur", 0f, 1f, s.blur, 2, v -> s.blur = v));
-        add(new FSlider(right, cy + step * 4, colW, h, "Tilt", 0f, 15f, s.tilt, 1, v -> s.tilt = v));
 
         int next = (preset + 1) % PRESETS.length;
         add(Button.builder(Component.literal("Preset: " + PRESET_NAMES[next]), b -> {
@@ -126,9 +129,19 @@ public class SettingsScreen extends Screen {
             s.textColor = PRESETS[next][0];
             s.glowColor = PRESETS[next][1];
             refresh();
-        }).bounds(left, cy + step * 5, colW, h).build());
-        add(cycle(right, cy + step * 5, colW, "Shimmer", () -> Settings.SHIMMER[s.shimmer % Settings.SHIMMER.length],
+        }).bounds(right, cy + step * 4, colW, h).build());
+    }
+
+    private void initAnim(Settings s, int cy, int step, int h) {
+        add(cycle(left, cy, colW, "In effect", () -> s.in().label, () -> s.inEffect = s.in().next().name()));
+        add(cycle(right, cy, colW, "Out effect", () -> s.out().label, () -> s.outEffect = s.out().next().name()));
+        add(cycle(left, cy + step, colW, "Effects from", () -> Settings.EFFECT_MODES[s.effectMode % Settings.EFFECT_MODES.length],
+            () -> s.effectMode = (s.effectMode + 1) % Settings.EFFECT_MODES.length));
+        add(cycle(right, cy + step, colW, "Shimmer", () -> Settings.SHIMMER[s.shimmer % Settings.SHIMMER.length],
             () -> s.shimmer = (s.shimmer + 1) % Settings.SHIMMER.length));
+        add(new FSlider(left, cy + step * 2, colW, h, "Shimmer speed", 0.2f, 3f, s.shimmerSpeed, 1, v -> s.shimmerSpeed = v));
+        add(new FSlider(right, cy + step * 2, colW, h, "Glint brightness", 0f, 3f, s.glint, 1, v -> s.glint = v));
+        add(new FSlider(left, cy + step * 3, colW, h, "Tilt", 0f, 15f, s.tilt, 1, v -> s.tilt = v));
     }
 
     private void initFont(Settings s, int cy, int step, int h) {
@@ -204,6 +217,14 @@ public class SettingsScreen extends Screen {
         return 1f - q * q * q;
     }
 
+    private void hover(GuiGraphics g, List<AbstractWidget> list, int mx, int my, int glow) {
+        for (AbstractWidget w : list) {
+            if (w.active && w.isMouseOver(mx, my)) {
+                g.renderOutline(w.getX() - 1, w.getY() - 1, w.getWidth() + 2, w.getHeight() + 2, 0xFF000000 | glow);
+            }
+        }
+    }
+
     @Override
     public void render(GuiGraphics g, int mx, int my, float pt) {
         renderBackground(g);
@@ -223,42 +244,39 @@ public class SettingsScreen extends Screen {
         g.pose().translate(-width / 2f, -height / 2f, 0f);
 
         int x1 = width / 2 - 168, x2 = width / 2 + 168;
-        int y1 = top - 24;
+        int y1 = panelTop;
         g.fill(x1 - 2, y1 - 2, x2 + 2, bottom + 2, ((bgA / 6) << 24) | glow);
         g.fill(x1, y1, x2, bottom, (bgA << 24) | 0x0A0614);
         g.renderOutline(x1, y1, x2 - x1, bottom - y1, ((int) (pulse * pAnim) << 24) | glow);
 
-        // glowing title
-        int tcx = width / 2;
-        int ty = top - 16;
+        // glowing title (left of the header)
+        int tx = x1 + 8;
+        int ty = y1 + 8;
         int gl = ((int) (0x55 * pAnim) << 24) | glow;
-        g.drawCenteredString(font, title, tcx - 1, ty, gl);
-        g.drawCenteredString(font, title, tcx + 1, ty, gl);
-        g.drawCenteredString(font, title, tcx, ty - 1, gl);
-        g.drawCenteredString(font, title, tcx, ty + 1, gl);
-        g.drawCenteredString(font, title, tcx, ty, 0xFFFFFFFF);
+        g.drawString(font, title, tx - 1, ty, gl, false);
+        g.drawString(font, title, tx + 1, ty, gl, false);
+        g.drawString(font, title, tx, ty - 1, gl, false);
+        g.drawString(font, title, tx, ty + 1, gl, false);
+        g.drawString(font, title, tx, ty, 0xFFFFFFFF, false);
 
-        // active tab underline
-        int tw = (colW * 2 + 8 - 12) / 4;
+        // live effect preview (menu only)
+        EffectPreview.render(g, font, x1 + 8, y1 + 22, x2 - x1 - 16, 30);
+
+        // tabs + Done (do not slide)
+        for (AbstractWidget w : header) w.render(g, mx, my, pt);
+        hover(g, header, mx, my, glow);
+        int tw = (colW * 2 + 8 - (TABS.length - 1) * 4) / TABS.length;
         int ux = left + tab * (tw + 4);
-        g.fill(ux, top + 22, ux + tw, top + 24, 0xFF000000 | glow);
+        g.fill(ux, tabsY + 22, ux + tw, tabsY + 24, 0xFF000000 | glow);
 
         // content slides in on tab switch
         g.pose().pushPose();
         g.pose().translate((1f - tAnim) * 18f, 0f, 0f);
-        if (tab == 1) {
-            g.fill(left, contentTop + 1, left + colW, contentTop + 6, 0xFF000000 | st.textColor);
-            g.fill(right, contentTop + 1, right + colW, contentTop + 6, 0xFF000000 | st.glowColor);
-        }
         super.render(g, mx, my, pt);
-        for (AbstractWidget w : ws) {
-            if (w.active && w.isMouseOver(mx, my)) {
-                g.renderOutline(w.getX() - 1, w.getY() - 1, w.getWidth() + 2, w.getHeight() + 2, 0xFF000000 | glow);
-            }
-        }
-        if (tab == 2) {
-            g.drawCenteredString(font, "Your own fonts: resource pack -> assets/evolyrics/font/", width / 2, contentTop + 136, 0xFF9A8CC0);
-        } else if (tab == 3) {
+        hover(g, content, mx, my, glow);
+        if (tab == 3) {
+            g.drawCenteredString(font, "Your own fonts: resource pack -> assets/evolyrics/font/", width / 2, contentTop + 134, 0xFF9A8CC0);
+        } else if (tab == 4) {
             g.drawCenteredString(font, "Songs: .minecraft/config/evolyrics/songs", width / 2, contentTop + 116, 0xFF9A8CC0);
         }
         g.pose().popPose();

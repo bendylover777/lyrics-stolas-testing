@@ -10,7 +10,7 @@ import java.util.regex.Pattern;
 /** Turns synced LRC text into short timed chunks (a couple of words each). Pure Java. */
 public final class LrcParser {
     public static final String[] EFFECTS = {"FADE", "RISE", "SCALE_IN", "SLIDE_LEFT", "SLIDE_RIGHT", "POP", "FLOAT",
-        "ROTATE", "BLUR", "GLITCH", "WAVE", "DROP"};
+        "ROTATE", "BLUR", "GLITCH", "WAVE", "DROP", "DECODE", "FALL", "TYPE"};
     private static final Pattern LRC = Pattern.compile("\\[(\\d+):(\\d+(?:\\.\\d+)?)\\]\\s*(.*)");
 
     public static final class Row {

@@ -46,12 +46,7 @@ public class Song {
         public transient String charFont;
 
         private Component styled(String s, String font) {
-            ResourceLocation rl = (font == null || font.isEmpty()) ? null : ResourceLocation.tryParse(font);
-            MutableComponent c = Component.literal(s);
-            if (rl != null) {
-                return c.withStyle(st -> st.withFont(rl));
-            }
-            return c.withStyle(ChatFormatting.BOLD);
+            return styledComponent(s, font);
         }
 
         /** Cached styled text for the chosen font (rebuilt only when the font changes). */
@@ -88,6 +83,16 @@ public class Song {
             charCount = n;
             textWidth = x;
         }
+    }
+
+    /** Text in the chosen lyrics font (vanilla pixel font is bold, custom fonts are used as they are). */
+    public static Component styledComponent(String s, String font) {
+        ResourceLocation rl = (font == null || font.isEmpty()) ? null : ResourceLocation.tryParse(font);
+        MutableComponent c = Component.literal(s);
+        if (rl != null) {
+            return c.withStyle(st -> st.withFont(rl));
+        }
+        return c.withStyle(ChatFormatting.BOLD);
     }
 
     public void prepare() {

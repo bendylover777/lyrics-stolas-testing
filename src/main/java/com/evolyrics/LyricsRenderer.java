@@ -34,6 +34,13 @@ public final class LyricsRenderer {
     private static final int[] SLOT_LINE = new int[SLOTS];
     private static final int[] SLOT_GEN = new int[SLOTS];
     private static final LyricEffect.State STATE = new LyricEffect.State();
+    private static final LyricEffect[] ALL = LyricEffect.values();
+    private static final String SCRAMBLE_CHARS = "#%&@$?<>/|+=*~0123456789";
+    private static String scrFont;
+    private static Component[] scrComps = new Component[0];
+    private static int[] scrW = new int[0];
+    private static Component caretComp;
+    private static int caretW;
     private static final Random RND = new Random();
 
     private static final float[] RX = new float[8], RY = new float[8];
@@ -89,8 +96,22 @@ public final class LyricsRenderer {
                 SLOT_GEN[s] = Playback.generation;
             }
 
-            LyricEffect inFx = l.inFx != null ? l.inFx : st.in();
-            LyricEffect outFx = l.outFx != null ? l.outFx : st.out();
+            LyricEffect inFx;
+            LyricEffect outFx;
+            switch (st.effectMode) {
+                case 1 -> {
+                    inFx = l.inFx != null ? l.inFx : st.in();
+                    outFx = l.outFx != null ? l.outFx : st.out();
+                }
+                case 2 -> {
+                    inFx = ALL[Math.floorMod(i * 7 + 3, ALL.length)];
+                    outFx = ALL[Math.floorMod(i * 5 + 1, ALL.length)];
+                }
+                default -> {
+                    inFx = st.in();
+                    outFx = st.out();
+                }
+            }
             LyricEffect.State state = STATE;
             state.reset();
             inFx.applyIn(state, inP, (float) t);
@@ -134,13 +155,38 @@ public final class LyricsRenderer {
                     drawRing(font, comp, bx, y, spread * 2f, glowA * 0.10f, cMid, m, buf, mode, 1);
                     drawRing(font, comp, bx, y, spread, glowA * 0.20f * pulse, cMid, m, buf, mode, 1);
                 }
+                int cnt = l.charCount;
+                float fallPx = 1f / Math.max(0.02f, scale);   // font pixels per block
+                float prog = 1f - state.scramble;
+                boolean scr = state.scramble > 0.01f;
+                if (scr || state.caret) ensureExtras(st.font, font);
+                long tick = (long) Math.floor(rt * 18.0);
                 for (int k = 0; k < visible; k++) {
                     float cx = bx + l.charOff[k];
                     float cy = waveAmp != 0f ? y + (float) Math.sin(rt * 4.0 + k * 0.7) * waveAmp : y;
                     Component cc = l.charComps[k];
+                    // falling letters (staggered, with a bounce on landing / dropping away on exit)
+                    if (state.fall < 0.999f) {
+                        float lp = clamp01((state.fall - (cnt > 1 ? k * 0.5f / (cnt - 1) : 0f)) / 0.5f);
+                        if (lp <= 0.001f) continue;
+                        cy -= (1f - LyricEffect.bounce(lp)) * 1.3f * fallPx;
+                    }
+                    if (state.fallOut > 0.001f) {
+                        float lo = clamp01((state.fallOut - (cnt > 1 ? k * 0.4f / (cnt - 1) : 0f)) / 0.6f);
+                        cy += lo * lo * 1.2f * fallPx;
+                    }
                     int col = shimmer(st.shimmer, rgb, glowRgb, rt, st.shimmerSpeed, k);
                     float gk = st.shimmer == 1 ? glintK(rt, st.shimmerSpeed, k) : 0f;
                     float boost = 1f + gk * st.glint * 0.7f;
+                    // decode: unresolved letters are random symbols
+                    boolean unresolved = scr && prog * 1.15f < (k + 1f) / cnt;
+                    if (unresolved && scrComps.length > 0) {
+                        int gi = (int) Math.floorMod(tick + k * 7L, (long) scrComps.length);
+                        cc = scrComps[gi];
+                        int cw = (k + 1 < cnt ? l.charOff[k + 1] : l.textWidth) - l.charOff[k];
+                        cx += (cw - scrW[gi]) / 2f;
+                        col = lerpRgb(col, 0x39FFB0, 0.55f);
+                    }
                     if (perCharGlow && st.glow > 0.02f) {
                         drawRing(font, cc, cx, cy, spread * 2f, glowA * 0.10f, col, m, buf, mode, 1);
                         drawRing(font, cc, cx, cy, spread, glowA * 0.20f * pulse, col, m, buf, mode, 1);
@@ -151,16 +197,26 @@ public final class LyricsRenderer {
                     if (gk > 0.35f && st.glint > 0.05f) {
                         drawRing(font, cc, cx, cy, neonR * 3f, alpha * 0.3f * gk * st.glint, col, m, buf, mode, 1);
                     }
+                    float mx = cx;
                     if (gAmp > 0f) {
+                        // RGB split + occasional horizontal slice jumps
                         float jx = (float) Math.sin(rt * 47.0 + k * 12.9898) * gAmp;
                         float jy = (float) Math.sin(rt * 31.0 + k * 78.233) * gAmp * 0.35f;
                         int ga = Math.min(255, (int) (alpha * 0.75f * 255f));
                         font.drawInBatch(cc, cx + jx, cy + jy, (ga << 24) | 0xFF2D55, false, m, buf, mode, 0, FULL_BRIGHT);
                         font.drawInBatch(cc, cx - jx, cy - jy, (ga << 24) | 0x2DE6FF, false, m, buf, mode, 0, FULL_BRIGHT);
+                        if (hash01(k, (long) Math.floor(rt * 14.0)) > 0.8f) {
+                            mx += (hash01(k + 91, (long) Math.floor(rt * 14.0)) - 0.5f) * 6f * gAmp;
+                        }
                     }
                     int core = lerpRgb(coreRgb, col, 0.28f);
                     if (gk > 0f) core = lerpRgb(core, 0xFFFFFF, Math.min(1f, gk * st.glint * 0.6f));
-                    font.drawInBatch(cc, cx, cy, (a << 24) | core, false, m, buf, mode, 0, FULL_BRIGHT);
+                    font.drawInBatch(cc, mx, cy, (a << 24) | core, false, m, buf, mode, 0, FULL_BRIGHT);
+                }
+                if (state.caret && caretComp != null && ((long) Math.floor(rt * 3.2)) % 2 == 0) {
+                    float cxk = bx + (visible < cnt ? l.charOff[visible] : l.textWidth);
+                    drawRing(font, caretComp, cxk, y, neonR, alpha * 0.9f * st.neon, glowRgb, m, buf, mode, 1);
+                    font.drawInBatch(caretComp, cxk, y, (a << 24) | coreRgb, false, m, buf, mode, 0, FULL_BRIGHT);
                 }
             } else {
                 if (l.width < 0) l.width = font.width(comp);
@@ -192,11 +248,11 @@ public final class LyricsRenderer {
         }
     }
 
-    private static int mixWhite(int rgb, float k) {
+    static int mixWhite(int rgb, float k) {
         return lerpRgb(rgb, 0xFFFFFF, k);
     }
 
-    private static int lerpRgb(int a, int b, float k) {
+    static int lerpRgb(int a, int b, float k) {
         if (k <= 0f) return a;
         if (k >= 1f) return b;
         int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
@@ -208,13 +264,13 @@ public final class LyricsRenderer {
     }
 
     /** 0..1 strength of the white glint sweep on letter #idx (wide, bright band). */
-    private static float glintK(double rt, double speed, int idx) {
+    static float glintK(double rt, double speed, int idx) {
         double v = Math.sin((rt * speed - idx * 0.11) * 2.2) * 0.5 + 0.5;
         return (float) (v * v);
     }
 
     /** Color of letter #idx at real time rt. 1 = glint sweep, 2 = rainbow, 3 = flow between text and glow color. */
-    private static int shimmer(int mode, int baseRgb, int altRgb, double rt, double speed, int idx) {
+    static int shimmer(int mode, int baseRgb, int altRgb, double rt, double speed, int idx) {
         double ph = rt * speed - idx * 0.11;
         switch (mode) {
             case 1: {
@@ -231,9 +287,50 @@ public final class LyricsRenderer {
                 float k = (float) (Math.sin(ph * 1.8) * 0.5 + 0.5);
                 return lerpRgb(baseRgb, altRgb, k);
             }
+            case 4: { // pulse: the whole line breathes between the glow color and white
+                double v = Math.sin(rt * speed * 2.4) * 0.5 + 0.5;
+                return lerpRgb(altRgb, 0xFFFFFF, (float) (v * v * 0.75));
+            }
+            case 5: { // aurora: green - blue - violet drifting along the word
+                double hh = 0.45 + 0.4 * (Math.sin(ph * 0.9) * 0.5 + 0.5);
+                return Mth.hsvToRgb((float) hh, 0.65f, 1f) & 0xFFFFFF;
+            }
+            case 6: { // fire: red to yellow with fast flicker
+                double f = Math.sin(ph * 6.0) * 0.5 + 0.5;
+                f *= 0.6 + 0.4 * (Math.sin(ph * 17.0 + idx) * 0.5 + 0.5);
+                return lerpRgb(0xFF2A00, 0xFFD23C, (float) f);
+            }
+            case 7: { // flicker: a failing neon sign
+                float fr = hash01(idx, (long) Math.floor(rt * 9.0 * speed));
+                return fr > 0.86f ? lerpRgb(altRgb, 0x202030, 0.85f) : altRgb;
+            }
             default:
                 return altRgb;
         }
+    }
+
+    static float hash01(int a, long b) {
+        double h = Math.sin(a * 12.9898 + b * 78.233) * 43758.5453;
+        return (float) Math.abs(h % 1.0);
+    }
+
+    static float clamp01(float v) {
+        return v < 0f ? 0f : Math.min(v, 1f);
+    }
+
+    /** Builds the random-symbol pool (decode effect) and the typing caret for the chosen font. */
+    private static void ensureExtras(String fontId, Font font) {
+        if (java.util.Objects.equals(scrFont, fontId) && scrComps.length > 0) return;
+        scrFont = fontId;
+        int n = SCRAMBLE_CHARS.length();
+        scrComps = new Component[n];
+        scrW = new int[n];
+        for (int i = 0; i < n; i++) {
+            scrComps[i] = Song.styledComponent(String.valueOf(SCRAMBLE_CHARS.charAt(i)), fontId);
+            scrW[i] = font.width(scrComps[i]);
+        }
+        caretComp = Song.styledComponent("|", fontId);
+        caretW = font.width(caretComp);
     }
 
     /** New line appears inside the camera's field of view (works in 1st and 3rd person: based on the camera). */

@@ -12,7 +12,8 @@ import java.nio.file.Path;
 
 public final class Settings {
     public static final String[] SOURCES = {"Manual", "Auto (built-in)", "File bridge"};
-    public static final String[] SHIMMER = {"Off", "Glint", "Rainbow", "Flow"};
+    public static final String[] SHIMMER = {"Off", "Glint", "Rainbow", "Flow", "Pulse", "Aurora", "Fire", "Flicker"};
+    public static final String[] EFFECT_MODES = {"Menu", "File", "Mix"};
     public static final String[] POSITIONS = {"Field of view", "Center", "Top", "Bottom"};
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     public static Settings I = new Settings();
@@ -47,6 +48,7 @@ public final class Settings {
     public boolean consoleLine = true;
     public boolean sidePreview = true;
     public boolean autoLyrics = true;
+    public int effectMode = 0;        // 0 = In/Out effect from the menu, 1 = per line from lyrics.json, 2 = mix of all
 
     public LyricEffect in() {
         LyricEffect e = LyricEffect.parse(inEffect);
