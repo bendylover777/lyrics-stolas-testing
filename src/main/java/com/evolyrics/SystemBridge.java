@@ -35,6 +35,7 @@ public final class SystemBridge {
     public static String nowArtist = "";
     public static String lyricsStatus = "";
     public static String lastError = "";
+    public static volatile double len = 0;
     public static int tracks, downloaded, hadOwn, notFound;
     private static final ArrayDeque<String> LOG = new ArrayDeque<>();
 
@@ -84,6 +85,17 @@ public final class SystemBridge {
         Runtime.getRuntime().addShutdownHook(new Thread(SystemBridge::stop));
     }
 
+    /** Is the built-in bridge running (so we can control the real player)? */
+    public static boolean active() {
+        return poller != null;
+    }
+
+    /** next / prev / toggle / seek (seconds). Runs in the background, no window. */
+    public static void control(String cmd, double arg) {
+        NowPlaying.Poller p = poller;
+        if (p != null) p.command(cmd, arg);
+    }
+
     public static void stop() {
         if (poller != null) {
             poller.stop();
@@ -120,6 +132,7 @@ public final class SystemBridge {
             lastKey = key;
             onNewTrack(info);
         }
+        len = info.len;
         setState(info.playing ? "playing" : "paused");
         if (!info.app.equals(app)) {
             app = info.app;

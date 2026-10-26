@@ -23,13 +23,19 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 
 public final class ClientEvents {
-    public static final KeyMapping OPEN = new KeyMapping("key.evolyrics.open", InputConstants.KEY_K, "key.categories.evolyrics");
+    public static final KeyMapping OPEN = new KeyMapping("key.stolas.menu", InputConstants.KEY_RSHIFT, "key.categories.stolas");
+    public static final KeyMapping NEXT = new KeyMapping("key.stolas.next", InputConstants.UNKNOWN.getValue(), "key.categories.stolas");
+    public static final KeyMapping PREV = new KeyMapping("key.stolas.prev", InputConstants.UNKNOWN.getValue(), "key.categories.stolas");
+    public static final KeyMapping TOGGLE = new KeyMapping("key.stolas.toggle", InputConstants.UNKNOWN.getValue(), "key.categories.stolas");
 
     @Mod.EventBusSubscriber(modid = EvoLyrics.MODID, value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.MOD)
     public static final class ModBus {
         @SubscribeEvent
         public static void keys(RegisterKeyMappingsEvent e) {
             e.register(OPEN);
+            e.register(NEXT);
+            e.register(PREV);
+            e.register(TOGGLE);
         }
 
         @SubscribeEvent
@@ -57,6 +63,9 @@ public final class ClientEvents {
             while (OPEN.consumeClick()) {
                 if (mc.screen == null) mc.setScreen(new SettingsScreen(null));
             }
+            while (NEXT.consumeClick()) Transport.next();
+            while (PREV.consumeClick()) Transport.prev();
+            while (TOGGLE.consumeClick()) Transport.toggle();
             SystemBridge.tick();
             Playback.tick();
         }
@@ -72,7 +81,6 @@ public final class ClientEvents {
         public static void commands(RegisterClientCommandsEvent e) {
             CommandDispatcher<CommandSourceStack> d = e.getDispatcher();
             d.register(root("stolaslyrics"));
-            d.register(root("evolyrics"));
         }
 
         private static LiteralArgumentBuilder<CommandSourceStack> root(String name) {

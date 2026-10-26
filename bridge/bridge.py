@@ -21,7 +21,7 @@ import urllib.parse
 import urllib.request
 
 # Папка конфига мода. Если у тебя другая сборка/лаунчер, поменяй путь.
-CONFIG_DIR = os.path.join(os.environ.get("APPDATA", "."), ".minecraft", "config", "evolyrics")
+CONFIG_DIR = os.path.join(os.environ.get("APPDATA", "."), ".minecraft", "config", "stolas")
 BRIDGE_FILE = os.path.join(CONFIG_DIR, "bridge.json")
 SONGS_DIR = os.path.join(CONFIG_DIR, "songs")
 LOG_FILE = os.path.join(CONFIG_DIR, "bridge.log")

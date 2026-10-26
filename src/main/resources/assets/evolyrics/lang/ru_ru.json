@@ -1,4 +1,7 @@
 {
-  "key.evolyrics.open": "Открыть меню Stolas Lyrics",
-  "key.categories.evolyrics": "Stolas Lyrics"
+  "key.stolas.menu": "Открыть меню плеера",
+  "key.stolas.next": "Следующая песня",
+  "key.stolas.prev": "Предыдущая песня",
+  "key.stolas.toggle": "Пауза / играть",
+  "key.categories.stolas": "Плеер"
 }

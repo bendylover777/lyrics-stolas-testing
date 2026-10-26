@@ -13,8 +13,24 @@ import java.util.stream.Stream;
 public final class SongLibrary {
     public static final Map<String, Song> songs = new LinkedHashMap<>();
 
+    private static Path dirCache;
+
+    /** config/stolas (the old config/evolyrics folder is moved here automatically). */
     public static Path dir() {
-        return FMLPaths.CONFIGDIR.get().resolve("evolyrics");
+        if (dirCache != null) return dirCache;
+        Path root = FMLPaths.CONFIGDIR.get();
+        Path fresh = root.resolve("stolas");
+        Path old = root.resolve("evolyrics");
+        if (!Files.exists(fresh) && Files.isDirectory(old)) {
+            try {
+                Files.move(old, fresh);
+            } catch (IOException e) {
+                dirCache = old;
+                return old;
+            }
+        }
+        dirCache = fresh;
+        return fresh;
     }
 
     public static Path songsDir() {
@@ -60,8 +76,8 @@ public final class SongLibrary {
         Song s = new Song();
         s.id = "example";
         s.title = "Example";
-        s.artist = "EvoLyrics";
-        s.addLine(1.0, "EVOLYRICS", "pop");
+        s.artist = "Stolas";
+        s.addLine(1.0, "STOLAS", "pop");
         s.addLine(3.0, "rise", "rise");
         s.addLine(5.0, "fade in", "fade");
         s.addLine(7.0, "scale in", "scale_in");

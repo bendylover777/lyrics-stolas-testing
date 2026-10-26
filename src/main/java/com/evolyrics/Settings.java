@@ -61,7 +61,7 @@ public final class Settings {
     }
 
     private static Path file() {
-        return FMLPaths.CONFIGDIR.get().resolve("evolyrics").resolve("settings.json");
+        return SongLibrary.dir().resolve("settings.json");
     }
 
     public static void load() {

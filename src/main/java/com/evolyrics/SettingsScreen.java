@@ -14,13 +14,16 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 public class SettingsScreen extends Screen {
-    private static final String[] TABS = {"Lyrics", "Look", "Anim", "Font", "Music"};
+    private static final String[] TABS = {"Lyrics", "Look", "Anim", "Font", "Music", "Songs"};
     private static final String[] PRESET_NAMES = {"Ice", "Pink", "Violet", "Gold", "Mint", "Pure white"};
     private static final int[][] PRESETS = {
         {0xFFFFFF, 0x7FA8FF}, {0xFFFFFF, 0xFF7ACB}, {0xF2E8FF, 0xA855F7},
         {0xFFF3B0, 0xFFB020}, {0xE8FFE8, 0x4ADE80}, {0xFFFFFF, 0xFFFFFF}};
 
     private static int tab = 0;
+    private static int songPage = 0;
+    private TimeSlider timeSlider;
+    private String pageInfo = "";
     private static int preset = 0;
     private static boolean switching = false;
     private static boolean skipSlide = false;
@@ -93,6 +96,7 @@ public class SettingsScreen extends Screen {
             case 1 -> initLook(s, cy, step, h);
             case 2 -> initAnim(s, cy, step, h);
             case 3 -> initFont(s, cy, step, h);
+            case 5 -> initSongs(s, cy, step, h);
             default -> initMusic(s, cy, step, h);
         }
         bottom = cy + step * 6 + 14;
@@ -163,26 +167,82 @@ public class SettingsScreen extends Screen {
     private void initMusic(Settings s, int cy, int step, int h) {
         add(cycle(left, cy, colW, "Source", () -> Settings.SOURCES[s.source % Settings.SOURCES.length],
             () -> s.source = (s.source + 1) % Settings.SOURCES.length));
-        add(cycle(right, cy, colW, "Song", () -> Playback.current == null ? "none" : Playback.current.id, () -> {
-            List<String> ids = new ArrayList<>(SongLibrary.songs.keySet());
-            if (ids.isEmpty()) return;
-            int i = Playback.current == null ? -1 : ids.indexOf(Playback.current.id);
-            Song next = SongLibrary.songs.get(ids.get((i + 1) % ids.size()));
-            s.lastSong = next.id;
-            Playback.play(next);
-        }));
-        add(cycle(left, cy + step, colW, "Playback", () -> Playback.isPlaying() ? "Playing" : "Paused", Playback::toggle));
         add(Button.builder(Component.literal("Reload songs"), b -> {
             String cur = Playback.current == null ? null : Playback.current.id;
             SongLibrary.reload();
             Playback.current = SongLibrary.find(cur);
-        }).bounds(right, cy + step, colW, h).build());
-        add(toggle(left, cy + step * 2, colW, "Island", () -> s.island, v -> s.island = v));
-        add(toggle(right, cy + step * 2, colW, "Island scroll", () -> s.islandScroll, v -> s.islandScroll = v));
-        add(toggle(left, cy + step * 3, colW, "Island lyrics", () -> s.islandLyrics, v -> s.islandLyrics = v));
-        add(toggle(right, cy + step * 3, colW, "Console line", () -> s.consoleLine, v -> s.consoleLine = v));
-        add(toggle(left, cy + step * 4, colW, "Side preview", () -> s.sidePreview, v -> s.sidePreview = v));
-        add(toggle(right, cy + step * 4, colW, "Auto lyrics", () -> s.autoLyrics, v -> s.autoLyrics = v));
+        }).bounds(right, cy, colW, h).build());
+
+        // transport: previous / play-pause / next
+        int total = colW * 2 + 8;
+        int bw = (total - 8) / 3;
+        add(Button.builder(Component.literal("<<  Prev"), b -> Transport.prev()).bounds(left, cy + step, bw, h).build());
+        add(Button.builder(Component.literal(Playback.isPlaying() ? "Pause" : "Play"), b -> {
+            Transport.toggle();
+            b.setMessage(Component.literal(Playback.isPlaying() ? "Pause" : "Play"));
+        }).bounds(left + bw + 4, cy + step, bw, h).build());
+        add(Button.builder(Component.literal("Next  >>"), b -> Transport.next()).bounds(left + (bw + 4) * 2, cy + step, bw, h).build());
+
+        timeSlider = add(new TimeSlider(left, cy + step * 2, total, h));
+
+        add(toggle(left, cy + step * 3, colW, "Island", () -> s.island, v -> s.island = v));
+        add(toggle(right, cy + step * 3, colW, "Island scroll", () -> s.islandScroll, v -> s.islandScroll = v));
+        add(toggle(left, cy + step * 4, colW, "Island lyrics", () -> s.islandLyrics, v -> s.islandLyrics = v));
+        add(toggle(right, cy + step * 4, colW, "Console line", () -> s.consoleLine, v -> s.consoleLine = v));
+        add(toggle(left, cy + step * 5, colW, "Side preview", () -> s.sidePreview, v -> s.sidePreview = v));
+        add(toggle(right, cy + step * 5, colW, "Auto lyrics", () -> s.autoLyrics, v -> s.autoLyrics = v));
+    }
+
+    /** Song list: click a song to play it (switches Source to Manual). */
+    private void initSongs(Settings s, int cy, int step, int h) {
+        List<String> ids = new ArrayList<>(SongLibrary.songs.keySet());
+        int perPage = 8;
+        int pages = Math.max(1, (ids.size() + perPage - 1) / perPage);
+        if (songPage >= pages) songPage = pages - 1;
+        if (songPage < 0) songPage = 0;
+        String curId = Playback.current == null ? "" : Playback.current.id;
+        for (int i = 0; i < perPage; i++) {
+            int idx = songPage * perPage + i;
+            if (idx >= ids.size()) break;
+            final String id = ids.get(idx);
+            String label = id.length() > 24 ? id.substring(0, 23) + "…" : id;
+            if (id.equals(curId)) label = "> " + label;
+            int x = (i % 2 == 0) ? left : right;
+            int y = cy + (i / 2) * step;
+            add(Button.builder(Component.literal(label), b -> {
+                Song song = SongLibrary.songs.get(id);
+                if (song == null) return;
+                s.source = 0;
+                s.lastSong = id;
+                Playback.play(song);
+                refresh();
+            }).bounds(x, y, colW, h).build());
+        }
+        int by = cy + step * 4;
+        add(Button.builder(Component.literal("<  Page"), b -> {
+            songPage = Math.max(0, songPage - 1);
+            refresh();
+        }).bounds(left, by, colW, h).build());
+        add(Button.builder(Component.literal("Page  >"), b -> {
+            songPage = Math.min(pages - 1, songPage + 1);
+            refresh();
+        }).bounds(right, by, colW, h).build());
+        pageInfo = "Page " + (songPage + 1) + " / " + pages + "   (" + ids.size() + " songs)";
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        if (timeSlider != null) timeSlider.sync();
+    }
+
+    @Override
+    public boolean keyPressed(int key, int scan, int mods) {
+        if (ClientEvents.OPEN.matches(key, scan)) {
+            onClose();
+            return true;
+        }
+        return super.keyPressed(key, scan, mods);
     }
 
     private FSlider colorSlider(int x, int y, String label, int shift, boolean text) {
@@ -208,6 +268,10 @@ public class SettingsScreen extends Screen {
             next.run();
             b.setMessage(Component.literal(name + ": " + get.get()));
         }).bounds(x, y, w, 20).build();
+    }
+
+    private static int step5() {
+        return 22 * 5 + 2;
     }
 
     private static float ease(float p) {
@@ -275,9 +339,12 @@ public class SettingsScreen extends Screen {
         super.render(g, mx, my, pt);
         hover(g, content, mx, my, glow);
         if (tab == 3) {
-            g.drawCenteredString(font, "Your own fonts: resource pack -> assets/evolyrics/font/", width / 2, contentTop + 134, 0xFF9A8CC0);
+            g.drawCenteredString(font, "More fonts: add them in a resource pack", width / 2, contentTop + 134, 0xFF9A8CC0);
         } else if (tab == 4) {
-            g.drawCenteredString(font, "Songs: .minecraft/config/evolyrics/songs", width / 2, contentTop + 116, 0xFF9A8CC0);
+            g.drawCenteredString(font, "Keys: Controls > Player (menu, next, previous, pause)", width / 2, contentTop + 132, 0xFF9A8CC0);
+        } else if (tab == 5) {
+            g.drawCenteredString(font, pageInfo, width / 2, contentTop + step5(), 0xFF9A8CC0);
+            g.drawCenteredString(font, "Click a song to play it (Source switches to Manual)", width / 2, contentTop + step5() + 12, 0xFF9A8CC0);
         }
         g.pose().popPose();
 
@@ -297,6 +364,54 @@ public class SettingsScreen extends Screen {
     @Override
     public void onClose() {
         minecraft.setScreen(parent);
+    }
+
+    /** Position slider: drag to jump; the real player is told when you let go. */
+    private static final class TimeSlider extends AbstractSliderButton {
+        private boolean dragging;
+
+        TimeSlider(int x, int y, int w, int h) {
+            super(x, y, w, h, Component.empty(), 0.0);
+            sync();
+        }
+
+        private static String fmt(double sec) {
+            int t = (int) Math.max(0, sec);
+            return String.format(Locale.ROOT, "%d:%02d", t / 60, t % 60);
+        }
+
+        void sync() {
+            if (dragging) return;
+            double len = Transport.length();
+            this.value = len <= 0 ? 0.0 : Math.min(1.0, Math.max(0.0, Playback.position() / len));
+            updateMessage();
+        }
+
+        @Override
+        protected void updateMessage() {
+            double len = Transport.length();
+            setMessage(Component.literal("Time  " + fmt(this.value * len) + " / " + (len > 0 ? fmt(len) : "--:--")));
+        }
+
+        @Override
+        protected void applyValue() {
+            double len = Transport.length();
+            if (len > 0) Transport.seekLocal(this.value * len);
+        }
+
+        @Override
+        public void onClick(double mx, double my) {
+            dragging = true;
+            super.onClick(mx, my);
+        }
+
+        @Override
+        public void onRelease(double mx, double my) {
+            super.onRelease(mx, my);
+            dragging = false;
+            double len = Transport.length();
+            if (len > 0) Transport.seekRemote(this.value * len);
+        }
     }
 
     private static final class FSlider extends AbstractSliderButton {

@@ -25,6 +25,10 @@ public final class NowPlaying {
 
         /** Last problem (permission, missing PowerShell...), or null. */
         String error();
+
+        /** Control the real player: "next", "prev", "toggle" or "seek" (arg = seconds). Non-blocking. */
+        default void command(String cmd, double arg) {
+        }
     }
 
     private NowPlaying() {
@@ -112,6 +116,27 @@ public final class NowPlaying {
         private volatile String error;
         private volatile boolean running;
         private Thread thread;
+
+        @Override
+        public void command(String cmd, double arg) {
+            final String verb;
+            if (cmd.equals("next")) verb = "next track";
+            else if (cmd.equals("prev")) verb = "previous track";
+            else if (cmd.equals("toggle")) verb = "playpause";
+            else if (cmd.equals("seek")) verb = "set player position to " + String.format(Locale.ROOT, "%.3f", arg);
+            else return;
+            Thread t = new Thread(() -> {
+                try {
+                    Process p = new ProcessBuilder("osascript", "-e", "tell application \"Spotify\" to " + verb).start();
+                    p.getInputStream().readAllBytes();
+                    p.waitFor(10, TimeUnit.SECONDS);
+                    p.destroyForcibly();
+                } catch (Exception ignored) {
+                }
+            }, "StolasLyrics-ctl");
+            t.setDaemon(true);
+            t.start();
+        }
 
         @Override
         public synchronized void start() {
@@ -234,6 +259,29 @@ public final class NowPlaying {
         }
         """;
 
+    static final String WIN_CTRL = """
+        $ErrorActionPreference = 'Stop'
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime
+        $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
+        function Await($op, $type) {
+          $task = $asTaskGeneric.MakeGenericMethod($type).Invoke($null, @($op))
+          $task.Wait(-1) | Out-Null
+          return $task.Result
+        }
+        [void][Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]
+        $mgrType = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]
+        $mgr = Await ($mgrType::RequestAsync()) $mgrType
+        $session = $null
+        foreach ($s in $mgr.GetSessions()) { if ($s.SourceAppUserModelId -match 'spotify') { $session = $s; break } }
+        if ($null -eq $session) { $session = $mgr.GetCurrentSession() }
+        if ($null -eq $session) { exit }
+        $cmd = '__CMD__'
+        if ($cmd -eq 'next') { $null = Await ($session.TrySkipNextAsync()) ([bool]) }
+        elseif ($cmd -eq 'prev') { $null = Await ($session.TrySkipPreviousAsync()) ([bool]) }
+        elseif ($cmd -eq 'toggle') { $null = Await ($session.TryTogglePlayPauseAsync()) ([bool]) }
+        elseif ($cmd -eq 'seek') { $null = Await ($session.TryChangePlaybackPositionAsync([int64](__ARG__ * 10000000))) ([bool]) }
+        """;
+
     static String winAppName(String id) {
         String s = id.toLowerCase(Locale.ROOT);
         if (s.contains("spotify")) return "Spotify";
@@ -308,6 +356,28 @@ public final class NowPlaying {
         @Override
         public String error() {
             return error;
+        }
+
+        @Override
+        public void command(String cmd, double arg) {
+            if (!(cmd.equals("next") || cmd.equals("prev") || cmd.equals("toggle") || cmd.equals("seek"))) return;
+            final String script = WIN_CTRL.replace("__CMD__", cmd).replace("__ARG__", String.format(Locale.ROOT, "%.3f", arg));
+            Thread t = new Thread(() -> {
+                try {
+                    String enc = Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_16LE));
+                    ProcessBuilder pb = new ProcessBuilder("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+                        "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc);
+                    pb.redirectErrorStream(true);
+                    Process p = pb.start();
+                    p.getInputStream().readAllBytes();
+                    p.waitFor(15, TimeUnit.SECONDS);
+                    p.destroyForcibly();
+                } catch (Exception ex) {
+                    error = "Control failed: " + ex.getMessage();
+                }
+            }, "StolasLyrics-ctl");
+            t.setDaemon(true);
+            t.start();
         }
 
         private void loop() {
