@@ -10,8 +10,7 @@ import java.util.List;
 
 /** Previous lines fade out on the left side of the screen, upcoming lines fade in on the right side. */
 public final class SidePreview {
-    private static final float K = 1.6f;      // text scale
-    private static final double HORIZON = 4.0; // seconds an upcoming line is visible in advance
+        private static final double HORIZON = 4.0; // seconds an upcoming line is visible in advance
 
     private SidePreview() {
     }
@@ -51,7 +50,8 @@ public final class SidePreview {
     private static void draw(GuiGraphics g, Font font, Song.Line l, float x, int y, boolean alignRight, float alpha, int rgb, Settings st) {
         if (alpha < 0.04f) return;
         if (alpha > 1f) alpha = 1f;
-        Component c = l.comp(st.font);
+        final float K = st.sideScale;
+        Component c = l.comp(st.fontKey());
         float w = font.width(c) * K;
         float px = alignRight ? x - w : x;
         int a = (int) (alpha * 255f);

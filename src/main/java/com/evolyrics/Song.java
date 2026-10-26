@@ -2,10 +2,10 @@ package com.evolyrics;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.Font;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.Style;
 import net.minecraft.resources.ResourceLocation;
 
 import java.io.IOException;
@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 
 /** One song = one lyrics.json. Editable at runtime (editor-ready): addLine/prepare/save. */
@@ -24,6 +25,8 @@ public class Song {
     public String title = "";
     public String artist = "";
     public List<Line> lyrics = new ArrayList<>();
+    /** Cleaned LRC text this song was built from (downloaded songs only): lets "words per chunk" be changed later. */
+    public String lrc = "";
     public transient String id = "";
 
     public static class Line {
@@ -85,14 +88,59 @@ public class Song {
         }
     }
 
-    /** Text in the chosen lyrics font (vanilla pixel font is bold, custom fonts are used as they are). */
-    public static Component styledComponent(String s, String font) {
-        ResourceLocation rl = (font == null || font.isEmpty()) ? null : ResourceLocation.tryParse(font);
-        MutableComponent c = Component.literal(s);
-        if (rl != null) {
-            return c.withStyle(st -> st.withFont(rl));
+    /**
+     * Text in the chosen lyrics font. {@code fontKey} is "fontId" or "fontId|flags" (see Settings.fontKey):
+     * flags = bold 1, italic 2, underline 4, case (UPPER 1 / lower 2) in bits 3-4.
+     * The vanilla pixel font is always bold, custom fonts are used as they are unless bold is asked for.
+     */
+    public static Component styledComponent(String s, String fontKey) {
+        String id = fontKey == null ? "" : fontKey;
+        int fl = 0;
+        int bar = id.indexOf('|');
+        if (bar >= 0) {
+            try {
+                fl = Integer.parseInt(id.substring(bar + 1));
+            } catch (NumberFormatException ignored) {
+            }
+            id = id.substring(0, bar);
         }
-        return c.withStyle(ChatFormatting.BOLD);
+        final ResourceLocation rl = id.isEmpty() ? null : ResourceLocation.tryParse(id);
+        final int flags = fl;
+        int cs = (fl >> 3) & 3;
+        String txt = cs == 1 ? s.toUpperCase(Locale.ROOT) : cs == 2 ? s.toLowerCase(Locale.ROOT) : s;
+        MutableComponent c = Component.literal(txt);
+        return c.withStyle(st -> {
+            Style x = st;
+            if (rl != null) x = x.withFont(rl);
+            if (rl == null || (flags & 1) != 0) x = x.withBold(true);
+            if ((flags & 2) != 0) x = x.withItalic(true);
+            if ((flags & 4) != 0) x = x.withUnderlined(true);
+            return x;
+        });
+    }
+
+    /** Replaces the lines by freshly built chunks (a downloaded LRC). */
+    public void applyChunks(List<LrcParser.Chunk> chunks) {
+        lyrics.clear();
+        for (LrcParser.Chunk c : chunks) {
+            Line l = new Line();
+            l.time = c.time;
+            l.text = c.text;
+            l.effect = c.effect;
+            l.out = c.out;
+            l.duration = c.duration;
+            lyrics.add(l);
+        }
+        prepare();
+    }
+
+    /** Builds the lines again from the stored LRC with another number of words per chunk. False when there is no LRC. */
+    public boolean rechunk(int wordsPerChunk) {
+        if (lrc == null || lrc.isBlank()) return false;
+        List<LrcParser.Chunk> chunks = LrcParser.build(LrcParser.parse(lrc), wordsPerChunk, 5.0);
+        if (chunks.isEmpty()) return false;
+        applyChunks(chunks);
+        return true;
     }
 
     public void prepare() {
@@ -129,6 +177,7 @@ public class Song {
             Song s = GSON.fromJson(r, Song.class);
             if (s == null) s = new Song();
             if (s.lyrics == null) s.lyrics = new ArrayList<>();
+            if (s.lrc == null) s.lrc = "";
             if (s.title == null) s.title = "";
             if (s.artist == null) s.artist = "";
             return s;

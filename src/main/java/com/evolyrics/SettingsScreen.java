@@ -6,6 +6,7 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
@@ -21,18 +22,16 @@ import java.util.function.Supplier;
  * (no re-creation), so nothing flickers. Everything is time based, so it is equally smooth at any frame rate.
  */
 public class SettingsScreen extends Screen {
-    private static final String[] TABS = {"Lyrics", "Look", "Anim", "Font", "Music", "Now"};
-    private static final String[] PRESET_NAMES = {"Ice", "Pink", "Violet", "Gold", "Mint", "Pure white"};
-    private static final int[][] PRESETS = {
-        {0xFFFFFF, 0x7FA8FF}, {0xFFFFFF, 0xFF7ACB}, {0xF2E8FF, 0xA855F7},
-        {0xFFF3B0, 0xFFB020}, {0xE8FFE8, 0x4ADE80}, {0xFFFFFF, 0xFFFFFF}};
+    private static final String[] TABS = {"Text", "Theme", "Anim", "Font", "Music", "Now", "More"};
+    private static final int MAX_ROWS = 7;
+    private static final java.util.Random RNG = new java.util.Random();
 
     private static final int PANEL_HALF = 168;
     private static final float OPEN_TIME = 0.34f;
     private static final float CLOSE_TIME = 0.16f;
 
     private static int tab = 0;
-    private static int preset = 0;
+    private static int fontPage = 0;
 
     // shared with the widgets, set once per frame in render()
     private static float uiAlpha = 1f;     // panel fade (open / close)
@@ -54,6 +53,9 @@ public class SettingsScreen extends Screen {
     private final float[] cardHov = new float[3];
     private final float[] cardPress = new float[3];
     private TimeSlider timeSlider;
+    private EditBox hexText, hexGlow;
+    private int fontPageCount = 1, fontTotal = 0;
+    private float shownBottom = Float.NaN;
 
     private final List<AbstractWidget> content = new ArrayList<>();
     private final List<AbstractWidget> header = new ArrayList<>();
@@ -104,12 +106,14 @@ public class SettingsScreen extends Screen {
         content.clear();
         header.clear();
         timeSlider = null;
+        hexText = null;
+        hexGlow = null;
         Settings s = Settings.I;
         colW = 150;
         int gap = 8, h = 20, step = 22;
         left = width / 2 - colW - gap / 2;
         right = width / 2 + gap / 2;
-        panelTop = Math.max(4, (height - 230) / 2);
+        panelTop = Math.max(4, (height - (98 + step * MAX_ROWS)) / 2);
         if (height >= 330) panelTop = Math.max(panelTop, 76);   // room for the expanded island above the panel
         tabsY = panelTop + 56;
 
@@ -126,53 +130,85 @@ public class SettingsScreen extends Screen {
 
         int cy = tabsY + 28;
         contentTop = cy;
+        int rows;
         switch (tab) {
-            case 0 -> initLyrics(s, cy, step, h);
-            case 1 -> initLook(s, cy, step, h);
-            case 2 -> initAnim(s, cy, step, h);
-            case 3 -> initFont(s, cy, step, h);
-            case 4 -> initMusic(s, cy, step, h);
-            default -> { }   // "Now" tab is drawn by hand (see drawNow)
+            case 0 -> { initText(s, cy, step, h); rows = 6; }
+            case 1 -> { initTheme(s, cy, step, h); rows = 7; }
+            case 2 -> { initAnim(s, cy, step, h); rows = 5; }
+            case 3 -> { initFont(s, cy, step, h); rows = 7; }
+            case 4 -> { initMusic(s, cy, step, h); rows = 6; }
+            case 6 -> { initMore(s, cy, step, h); rows = 7; }
+            default -> rows = 6;   // "Now" tab is drawn by hand (see drawNow)
         }
-        bottom = cy + step * 6 + 14;
+        bottom = cy + step * rows + 14;
     }
 
     private int tabW() {
         return (colW * 2 + 8 - (TABS.length - 1) * 4) / TABS.length;
     }
 
-    private void initLyrics(Settings s, int cy, int step, int h) {
+    private void initText(Settings s, int cy, int step, int h) {
         add(toggle(left, cy, colW, "Lyrics", () -> s.enabled, v -> s.enabled = v));
-        add(new FSlider(left, cy + step, colW, h, "Size", 0.3f, 3f, s.size, 2, v -> s.size = v));
-        add(new FSlider(left, cy + step * 2, colW, h, "Distance", 2f, 20f, s.distance, 1, v -> s.distance = v));
-        add(new FSlider(left, cy + step * 3, colW, h, "Spread", 0f, 1f, s.scatter, 2, v -> s.scatter = v));
-        add(new FSlider(left, cy + step * 4, colW, h, "Opacity", 0.1f, 1f, s.opacity, 2, v -> s.opacity = v));
-        add(new FSlider(left, cy + step * 5, colW, h, "Sync offset", -3f, 3f, s.syncOffset, 2, v -> s.syncOffset = v));
-
         add(cycle(right, cy, colW, "Layout", () -> Settings.POSITIONS[s.position % Settings.POSITIONS.length],
             () -> s.position = (s.position + 1) % Settings.POSITIONS.length));
+        add(new FSlider(left, cy + step, colW, h, "Size", 0.3f, 3f, s.size, 2, v -> s.size = v));
         add(toggle(right, cy + step, colW, "Through walls", () -> s.throughWalls, v -> s.throughWalls = v));
+        add(new FSlider(left, cy + step * 2, colW, h, "Distance", 2f, 20f, s.distance, 1, v -> s.distance = v));
+        add(toggle(right, cy + step * 2, colW, "Text shadow", () -> s.shadow, v -> s.shadow = v));
+        add(new FSlider(left, cy + step * 3, colW, h, "Spread", 0f, 1f, s.scatter, 2, v -> s.scatter = v));
+        add(toggle(right, cy + step * 3, colW, "Hide if paused", () -> s.hideWhenPaused, v -> s.hideWhenPaused = v));
+        add(new FSlider(left, cy + step * 4, colW, h, "Opacity", 0.1f, 1f, s.opacity, 2, v -> s.opacity = v));
+        add(new FSlider(right, cy + step * 4, colW, h, "Max lines", 1f, 8f, s.maxVisible, 0, v -> s.maxVisible = Math.round(v)));
+        add(new FSlider(left, cy + step * 5, colW, h, "Sync offset", -3f, 3f, s.syncOffset, 2, v -> s.syncOffset = v));
+        add(new FSlider(right, cy + step * 5, colW, h, "Anim speed", 0.3f, 3f, s.animSpeed, 2, v -> s.animSpeed = v));
     }
 
-    private void initLook(Settings s, int cy, int step, int h) {
-        add(colorSlider(left, cy, "Text R", 16, true));
-        add(colorSlider(left, cy + step, "Text G", 8, true));
-        add(colorSlider(left, cy + step * 2, "Text B", 0, true));
-        add(colorSlider(right, cy, "Glow R", 16, false));
-        add(colorSlider(right, cy + step, "Glow G", 8, false));
-        add(colorSlider(right, cy + step * 2, "Glow B", 0, false));
-
-        add(new FSlider(left, cy + step * 3, colW, h, "Neon", 0f, 1f, s.neon, 2, v -> s.neon = v));
-        add(new FSlider(right, cy + step * 3, colW, h, "Glow", 0f, 1f, s.glow, 2, v -> s.glow = v));
-        add(new FSlider(left, cy + step * 4, colW, h, "Blur", 0f, 1f, s.blur, 2, v -> s.blur = v));
-
-        int next = (preset + 1) % PRESETS.length;
-        add(new Btn(right, cy + step * 4, colW, h, "Preset: " + PRESET_NAMES[next], Btn.ACTION, b -> {
-            preset = next;
-            s.textColor = PRESETS[next][0];
-            s.glowColor = PRESETS[next][1];
+    private void initTheme(Settings s, int cy, int step, int h) {
+        // the button shows the CURRENT theme ("Custom" when the colours match none) and goes to the next one
+        add(cycle(left, cy, colW, "Theme", () -> Theme.currentName(s), () -> {
+            Theme.apply(s, Theme.nextIndex(s));
             rebuild();
         }));
+        add(new Btn(right, cy, colW, h, "Random theme", Btn.ACTION, b -> {
+            Theme.apply(s, RNG.nextInt(Theme.PRESETS.length));
+            rebuild();
+        }));
+
+        add(colorSlider(left, cy + step, "Text R", 16, true));
+        add(colorSlider(left, cy + step * 2, "Text G", 8, true));
+        add(colorSlider(left, cy + step * 3, "Text B", 0, true));
+        add(colorSlider(right, cy + step, "Glow R", 16, false));
+        add(colorSlider(right, cy + step * 2, "Glow G", 8, false));
+        add(colorSlider(right, cy + step * 3, "Glow B", 0, false));
+
+        hexText = add(hexBox(left, cy + step * 4, true));
+        hexGlow = add(hexBox(right, cy + step * 4, false));
+
+        add(new FSlider(left, cy + step * 5, colW, h, "Neon", 0f, 1f, s.neon, 2, v -> s.neon = v));
+        add(new FSlider(right, cy + step * 5, colW, h, "Glow", 0f, 1f, s.glow, 2, v -> s.glow = v));
+        add(new FSlider(left, cy + step * 6, colW, h, "Blur", 0f, 1f, s.blur, 2, v -> s.blur = v));
+        add(new Btn(right, cy + step * 6, colW, h, "Swap colors", Btn.ACTION, b -> {
+            int t = s.textColor;
+            s.textColor = s.glowColor;
+            s.glowColor = t;
+            rebuild();
+        }));
+    }
+
+    /** "#RRGGBB" field next to a small label (the label is drawn in render()). */
+    private EditBox hexBox(int x, int y, boolean text) {
+        Settings s = Settings.I;
+        EditBox eb = new EditBox(font, x + 52, y, colW - 52, 20, Component.literal(text ? "Text hex" : "Glow hex"));
+        eb.setMaxLength(7);
+        eb.setFilter(v -> v.matches("#?[0-9a-fA-F]{0,6}"));
+        eb.setValue(Theme.hex(text ? s.textColor : s.glowColor));
+        eb.setResponder(v -> {
+            int c = Theme.parseHex(v);
+            if (c < 0) return;
+            if (text) s.textColor = c;
+            else s.glowColor = c;
+        });
+        return eb;
     }
 
     private void initAnim(Settings s, int cy, int step, int h) {
@@ -185,14 +221,30 @@ public class SettingsScreen extends Screen {
         add(new FSlider(left, cy + step * 2, colW, h, "Shimmer speed", 0.2f, 3f, s.shimmerSpeed, 1, v -> s.shimmerSpeed = v));
         add(new FSlider(right, cy + step * 2, colW, h, "Glint brightness", 0f, 3f, s.glint, 1, v -> s.glint = v));
         add(new FSlider(left, cy + step * 3, colW, h, "Tilt", 0f, 15f, s.tilt, 1, v -> s.tilt = v));
+        add(new Btn(left, cy + step * 4, colW, h, "Random effects", Btn.ACTION, b -> {
+            LyricEffect[] all = LyricEffect.values();
+            s.inEffect = all[RNG.nextInt(all.length)].name();
+            s.outEffect = all[RNG.nextInt(all.length)].name();
+        }));
+        add(new Btn(right, cy + step * 4, colW, h, "Swap in / out", Btn.ACTION, b -> {
+            String t = s.inEffect;
+            s.inEffect = s.outEffect;
+            s.outEffect = t;
+        }));
     }
 
     private void initFont(Settings s, int cy, int step, int h) {
         List<FontList.Entry> fonts = FontList.list();
-        int n = Math.min(fonts.size(), 12);
+        int per = 8;
+        fontTotal = fonts.size();
+        fontPageCount = Math.max(1, (fonts.size() + per - 1) / per);
+        if (fontPage >= fontPageCount) fontPage = fontPageCount - 1;
+        if (fontPage < 0) fontPage = 0;
         String cur = s.font == null ? "" : s.font;
-        for (int i = 0; i < n; i++) {
-            final FontList.Entry e = fonts.get(i);
+        for (int i = 0; i < per; i++) {
+            int idx = fontPage * per + i;
+            if (idx >= fonts.size()) break;
+            final FontList.Entry e = fonts.get(idx);
             int x = (i % 2 == 0) ? left : right;
             int y = cy + (i / 2) * step;
             Btn b = new Btn(x, y, colW, h, e.label, Btn.OPTION, bb -> {
@@ -203,6 +255,21 @@ public class SettingsScreen extends Screen {
             b.fontId = e.id;                                  // each entry is shown in its own font
             add(b);
         }
+        add(toggle(left, cy + step * 4, colW, "Bold", () -> s.bold, v -> s.bold = v));
+        add(toggle(right, cy + step * 4, colW, "Italic", () -> s.italic, v -> s.italic = v));
+        add(toggle(left, cy + step * 5, colW, "Underline", () -> s.underline, v -> s.underline = v));
+        add(cycle(right, cy + step * 5, colW, "Letters", () -> Settings.CASES[s.textCase % Settings.CASES.length],
+            () -> s.textCase = (s.textCase + 1) % Settings.CASES.length));
+        final int pages = fontPageCount;
+        int bw = (colW * 2 + 8 - 8) / 3;
+        add(new Btn(left, cy + step * 6, bw, h, "< Page", Btn.ACTION, b -> {
+            fontPage = Math.floorMod(fontPage - 1, pages);
+            rebuild();
+        }));
+        add(new Btn(left + (bw + 4) * 2, cy + step * 6, bw, h, "Page >", Btn.ACTION, b -> {
+            fontPage = Math.floorMod(fontPage + 1, pages);
+            rebuild();
+        }));
     }
 
     private void initMusic(Settings s, int cy, int step, int h) {
@@ -234,6 +301,27 @@ public class SettingsScreen extends Screen {
         add(toggle(right, cy + step * 5, colW, "Auto lyrics", () -> s.autoLyrics, v -> s.autoLyrics = v));
     }
 
+    private void initMore(Settings s, int cy, int step, int h) {
+        int na = Theme.UI_ACCENT_NAMES.length, nb = Theme.UI_BG_NAMES.length;
+        add(cycle(left, cy, colW, "UI accent", () -> Theme.UI_ACCENT_NAMES[s.uiAccent % na], () -> s.uiAccent = (s.uiAccent + 1) % na));
+        add(cycle(right, cy, colW, "UI background", () -> Theme.UI_BG_NAMES[s.uiBg % nb], () -> s.uiBg = (s.uiBg + 1) % nb));
+        add(new FSlider(left, cy + step, colW, h, "Island opacity", 0.2f, 1f, s.islandOpacity, 2, v -> s.islandOpacity = v));
+        add(new FSlider(right, cy + step, colW, h, "Island height", 0f, 30f, s.islandY, 0, v -> s.islandY = Math.round(v)));
+        add(new FSlider(left, cy + step * 2, colW, h, "Side text size", 0.8f, 3f, s.sideScale, 2, v -> s.sideScale = v));
+        add(new FSlider(right, cy + step * 2, colW, h, "Words / piece", 1f, 6f, s.wordsPerChunk, 0, v -> s.wordsPerChunk = Math.round(v)));
+        add(new Btn(left, cy + step * 3, colW, h, "Rebuild songs", Btn.ACTION, b -> {
+            int n = SongLibrary.rechunkAll(s.wordsPerChunk);
+            ClientEvents.toast("Rebuilt " + n + " songs (" + s.wordsPerChunk + " word(s) per piece)");
+        }));
+        add(toggle(right, cy + step * 3, colW, "Unsynced fallback", () -> s.allowUnsynced, v -> s.allowUnsynced = v));
+        String[] names = LyricsSources.names();
+        for (int i = 0; i < names.length && i < 5; i++) {
+            final int k = i;
+            add(toggle(i % 2 == 0 ? left : right, cy + step * (4 + i / 2), colW, names[i], () -> s.siteOn(k), v -> s.setSite(k, v)));
+        }
+        add(toggle(right, cy + step * 6, colW, "Hotkey messages", () -> s.toasts, v -> s.toasts = v));
+    }
+
     @Override
     public void tick() {
         super.tick();
@@ -247,6 +335,7 @@ public class SettingsScreen extends Screen {
     @Override
     public boolean keyPressed(int key, int scan, int mods) {
         if (closing) return true;
+        if (getFocused() instanceof EditBox eb && eb.isFocused()) return super.keyPressed(key, scan, mods);
         if (ClientEvents.OPEN.matches(key, scan)) {
             onClose();
             return true;
@@ -262,6 +351,8 @@ public class SettingsScreen extends Screen {
             int mask = ~(0xFF << shift);
             if (text) s.textColor = (s.textColor & mask) | (c << shift);
             else s.glowColor = (s.glowColor & mask) | (c << shift);
+            EditBox hb = text ? hexText : hexGlow;
+            if (hb != null && !hb.isFocused()) hb.setValue(Theme.hex(text ? s.textColor : s.glowColor));
         });
         f.tint = shift == 16 ? 0xFF6B6B : (shift == 8 ? 0x5BE38A : 0x6BA3FF);   // R / G / B tinted tracks
         return f;
@@ -287,7 +378,7 @@ public class SettingsScreen extends Screen {
         float dt = Math.min(0.1f, (now - lastNs) / 1e9f);
         lastNs = now;
         Settings st = Settings.I;
-        int glow = st.glowColor & 0xFFFFFF;
+        int glow = Theme.accent();
         double secs = now / 1e9;
 
         float openP = (now - openNs) / 1e9f / OPEN_TIME;
@@ -308,12 +399,13 @@ public class SettingsScreen extends Screen {
 
         int x1 = width / 2 - PANEL_HALF, x2 = width / 2 + PANEL_HALF;
         int y1 = panelTop;
-        int pw = x2 - x1, ph = bottom - y1;
+        shownBottom = Float.isNaN(shownBottom) ? bottom : Gfx.damp(shownBottom, bottom, 14f, dt);   // panel height glides between tabs
+        int pw = x2 - x1, ph = Math.round(shownBottom) - y1;
         float pulse = 0.5f + 0.5f * (float) Math.sin(secs * 2.2);
         Gfx.fillRoundFast(g, x1 - 4, y1 - 4, pw + 8, ph + 8, 14, Gfx.argb(glow, 0.045f * pa));
         Gfx.fillRoundFast(g, x1 - 2, y1 - 2, pw + 4, ph + 4, 12, Gfx.argb(glow, (0.06f + 0.05f * pulse) * pa));
         Gfx.fillRound(g, x1 - 1, y1 - 1, pw + 2, ph + 2, 11, Gfx.argb(glow, (0.40f + 0.30f * pulse) * pa));
-        Gfx.fillRound(g, x1, y1, pw, ph, 10, Gfx.argb(0x0B0716, 0.96f * pa));
+        Gfx.fillRound(g, x1, y1, pw, ph, 10, Gfx.argb(Theme.bg(), 0.96f * pa));
 
         // glowing title
         int tx = x1 + 12;
@@ -342,8 +434,12 @@ public class SettingsScreen extends Screen {
         // content (each widget fades / rises in with a small delay, see Btn / Sld)
         super.render(g, mx, my, pt);
         float ha = Gfx.easeOutCubic((uiAge - 0.25f) / 0.3f) * pa;
-        if (tab == 3) {
-            Gfx.textCentered(g, font, "More fonts: add them in a resource pack", width / 2, contentTop + 134, 0x9A8CC0, ha);
+        if (tab == 1) {
+            Gfx.text(g, font, "Text hex", left + 6, contentTop + 22 * 4 + 6, 0xB4B0CF, ha);
+            Gfx.text(g, font, "Glow hex", right + 6, contentTop + 22 * 4 + 6, 0xB4B0CF, ha);
+        } else if (tab == 3) {
+            Gfx.textCentered(g, font, "Page " + (fontPage + 1) + "/" + fontPageCount + "  (" + fontTotal + " fonts)",
+                width / 2, contentTop + 22 * 6 + 6, 0x9A8CC0, ha);
         } else if (tab == 4) {
             Gfx.textCentered(g, font, "Keys: Controls > Player (menu, next, previous, pause)", width / 2, contentTop + 132, 0x9A8CC0, ha);
         } else if (tab == 5) {
@@ -470,7 +566,7 @@ public class SettingsScreen extends Screen {
         float pulse = big ? (float) (Math.sin(secs * 2.4) * 0.5 + 0.5) : 0f;
         float halo = big ? 0.12f + 0.12f * pulse : 0.04f + 0.18f * hover;
         Gfx.fillRoundFast(g, x - 2, y - 2, w + 4, h + 4, r + 2, Gfx.argb(glow, halo * a));
-        Gfx.fillRound(g, x, y, w, h, r, Gfx.argb(0x120A22, 0.95f * a));
+        Gfx.fillRound(g, x, y, w, h, r, Gfx.argb(Theme.bg2(), 0.95f * a));
         if (hover > 0.02f) Gfx.fillRound(g, x, y, w, h, r, Gfx.argb(glow, 0.12f * hover * a));
         if (big) Gfx.outlineRound(g, x, y, w, h, r, Gfx.argb(glow, 0.45f * a));
         else if (hover > 0.03f) Gfx.outlineRound(g, x, y, w, h, r, Gfx.argb(glow, 0.55f * hover * a));

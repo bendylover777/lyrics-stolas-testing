@@ -64,8 +64,13 @@ public final class LyricsRenderer {
         Settings st = Settings.I;
         Song song = Playback.current;
         if (!st.enabled || song == null || song.lyrics.isEmpty()) return;
+        if (st.hideWhenPaused && !Playback.isPlaying()) return;
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
+        final String fk = st.fontKey();
+        final float inDur = IN_DUR / st.animSpeed;
+        final float outDur = OUT_DUR / st.animSpeed;
+        final int maxLines = Math.max(1, Math.min(SLOTS, st.maxVisible));
 
         double t = Playback.position() + st.syncOffset;
         List<Song.Line> ls = song.lyrics;
@@ -82,12 +87,12 @@ public final class LyricsRenderer {
         boolean drew = false;
         double rt = System.nanoTime() / 1e9;
 
-        for (int i = idx, n = 0; i >= 0 && n < SLOTS; i--, n++) {
+        for (int i = idx, n = 0; i >= 0 && n < maxLines; i--, n++) {
             Song.Line l = ls.get(i);
-            if (t >= l.end + OUT_DUR) continue;
+            if (t >= l.end + outDur) continue;
 
-            float inP = clamp((float) ((t - l.time) / IN_DUR));
-            float outP = t > l.end ? clamp((float) ((t - l.end) / OUT_DUR)) : 0f;
+            float inP = clamp((float) ((t - l.time) / inDur));
+            float outP = t > l.end ? clamp((float) ((t - l.end) / outDur)) : 0f;
 
             int s = i % SLOTS;
             if (SLOT_LINE[s] != i || SLOT_GEN[s] != Playback.generation) {
@@ -122,7 +127,7 @@ public final class LyricsRenderer {
 
             float unit = st.size * (DIST[s] / 9f) * SIZE_MUL[s];
             float scale = 0.16f * unit * state.scale;
-            Component comp = l.comp(st.font);
+            Component comp = l.comp(fk);
             float y = -4.5f;
             float rot = state.rot + TILT_RND[s] * st.tilt;
             float pulse = 0.92f + 0.08f * (float) Math.sin(t * 5.0 + i);
@@ -144,7 +149,7 @@ public final class LyricsRenderer {
 
             if (st.shimmer > 0 || state.needsLetters()) {
                 // letters are drawn one by one (shimmer / typewriter / wave / glitch), no allocations per frame
-                l.buildChars(st.font, font);
+                l.buildChars(fk, font);
                 float bx = -l.textWidth / 2f;
                 int visible = state.reveal >= 0.999f ? l.charCount : (int) Math.ceil(state.reveal * l.charCount);
                 float waveAmp = state.wave > 0f ? 1.6f * invS : 0f;
@@ -159,7 +164,7 @@ public final class LyricsRenderer {
                 float fallPx = 1f / Math.max(0.02f, scale);   // font pixels per block
                 float prog = 1f - state.scramble;
                 boolean scr = state.scramble > 0.01f;
-                if (scr || state.caret) ensureExtras(st.font, font);
+                if (scr || state.caret) ensureExtras(fk, font);
                 long tick = (long) Math.floor(rt * 18.0);
                 for (int k = 0; k < visible; k++) {
                     float cx = bx + l.charOff[k];
@@ -211,7 +216,7 @@ public final class LyricsRenderer {
                     }
                     int core = lerpRgb(coreRgb, col, 0.28f);
                     if (gk > 0f) core = lerpRgb(core, 0xFFFFFF, Math.min(1f, gk * st.glint * 0.6f));
-                    font.drawInBatch(cc, mx, cy, (a << 24) | core, false, m, buf, mode, 0, FULL_BRIGHT);
+                    font.drawInBatch(cc, mx, cy, (a << 24) | core, st.shadow, m, buf, mode, 0, FULL_BRIGHT);
                 }
                 if (state.caret && caretComp != null && ((long) Math.floor(rt * 3.2)) % 2 == 0) {
                     float cxk = bx + (visible < cnt ? l.charOff[visible] : l.textWidth);
@@ -228,7 +233,7 @@ public final class LyricsRenderer {
                 if (st.neon > 0.02f) {
                     drawRing(font, comp, x, y, neonR, alpha * 0.9f * st.neon * pulse, glowRgb, m, buf, mode, 1);
                 }
-                font.drawInBatch(comp, x, y, (a << 24) | coreRgb, false, m, buf, mode, 0, FULL_BRIGHT);
+                font.drawInBatch(comp, x, y, (a << 24) | coreRgb, st.shadow, m, buf, mode, 0, FULL_BRIGHT);
             }
             ps.popPose();
             drew = true;
@@ -304,9 +309,31 @@ public final class LyricsRenderer {
                 float fr = hash01(idx, (long) Math.floor(rt * 9.0 * speed));
                 return fr > 0.86f ? lerpRgb(altRgb, 0x202030, 0.85f) : altRgb;
             }
+            case 8: { // gradient: static ramp from the text colour to the glow colour along the word
+                double k = Math.abs(((idx * 0.12) % 2.0) - 1.0);
+                return lerpRgb(baseRgb, altRgb, (float) k);
+            }
+            case 9: // sunset
+                return ramp3(0xFF3D6E, 0xFF9A3C, 0xFFE066, Math.sin(ph * 0.9) * 0.5 + 0.5);
+            case 10: // ocean
+                return ramp3(0x0072FF, 0x00C6FF, 0x9CF6FF, Math.sin(ph * 0.9) * 0.5 + 0.5);
+            case 11: { // candy: pink <-> cyan
+                float k = (float) (Math.sin(ph * 1.3) * 0.5 + 0.5);
+                return lerpRgb(0xFF7AD9, 0x7AD9FF, k);
+            }
+            case 12: { // matrix: green digits flickering down the word
+                double v = Math.sin(ph * 3.0 + idx * 1.3) * 0.5 + 0.5;
+                return lerpRgb(0x00701F, 0x7CFF9A, (float) (v * v));
+            }
             default:
                 return altRgb;
         }
+    }
+
+    /** t in 0..1 moves along a 3-colour ramp. */
+    static int ramp3(int c1, int c2, int c3, double t) {
+        double u = t * 2.0;
+        return u < 1.0 ? lerpRgb(c1, c2, (float) u) : lerpRgb(c2, c3, (float) (u - 1.0));
     }
 
     static float hash01(int a, long b) {

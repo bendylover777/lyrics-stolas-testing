@@ -202,15 +202,15 @@ public final class Island {
         int w = Math.round(baseW + (Math.max(baseW, EXP_W) - baseW) * ee);
         int rad = Math.min(h / 2, 16);
         int x = Math.round((sw - w) / 2f);
-        int y = Math.round(5 - (1f - e) * 40);
-        int glowRgb = st.glowColor & 0xFFFFFF;
+        int y = Math.round(st.islandY - (1f - e) * 40);
+        int glowRgb = Theme.accent();
         int textRgb = st.textColor & 0xFFFFFF;
 
         double t = now / 1e9;
         float pulse = 0.34f + 0.12f * (float) (Math.sin(t * 3.0) * 0.5 + 0.5);
         Gfx.fillRoundFast(g, x - 2, y - 2, w + 4, h + 4, rad + 2, Gfx.argb(glowRgb, 0.14f * e));
         Gfx.fillRoundFast(g, x - 1, y - 1, w + 2, h + 2, rad + 1, Gfx.argb(glowRgb, pulse * e));
-        Gfx.fillRound(g, x, y, w, h, rad, Gfx.argb(0x000000, 0.95f * e));
+        Gfx.fillRound(g, x, y, w, h, rad, Gfx.argb(Theme.bg(), st.islandOpacity * e));
 
         // icon
         int iy = y + (baseH - 12) / 2;

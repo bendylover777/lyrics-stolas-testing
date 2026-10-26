@@ -3,5 +3,10 @@
   "key.stolas.next": "Следующая песня",
   "key.stolas.prev": "Предыдущая песня",
   "key.stolas.toggle": "Пауза / играть",
-  "key.categories.stolas": "Плеер"
+  "key.categories.stolas": "Плеер",
+  "key.stolas.lyrics": "Тексты вкл / выкл",
+  "key.stolas.sync_up": "Сдвиг синхронизации +0.1 с",
+  "key.stolas.sync_down": "Сдвиг синхронизации -0.1 с",
+  "key.stolas.theme": "Следующая цветовая тема",
+  "key.stolas.refetch": "Найти текст заново"
 }

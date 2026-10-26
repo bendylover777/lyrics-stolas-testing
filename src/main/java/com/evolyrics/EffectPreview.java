@@ -83,7 +83,7 @@ public final class EffectPreview {
     /** {@code sdy}: vertical offset of the pose the caller draws in (the scissor box does not follow the pose). */
     public static void render(GuiGraphics g, Font font, int x, int y, int w, int h, float fade, int sdy) {
         Settings st = Settings.I;
-        ensure(font, st.font);
+        ensure(font, st.fontKey());
         double rt = System.nanoTime() / 1e9;
         double cyc = rt % 4.2;
         float inP = LyricsRenderer.clamp01((float) (cyc / 0.7));
@@ -92,7 +92,7 @@ public final class EffectPreview {
         int rgb = st.textColor & 0xFFFFFF;
 
         Gfx.fillRound(g, x, y, w, h, 6, Gfx.argb(0x050509, 0.65f * fade));
-        Gfx.outlineRound(g, x, y, w, h, 6, Gfx.argb(glowRgb, 0.30f * fade));
+        Gfx.outlineRound(g, x, y, w, h, 6, Gfx.argb(Theme.accent(), 0.30f * fade));
         Gfx.text(g, font, st.in().label + "  >  " + st.out().label, x + 8, y + 4, 0x8B8AA8, fade);
         if (cyc > 3.8) return;
 

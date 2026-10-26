@@ -1,9 +1,10 @@
-StolasLyrics - UI update (smooth island, animated menu)
+StolasLyrics 1.1.0 - update
 
 1. Распакуй этот архив.
-2. На GitHub в репозитории: Add file -> Upload files.
-3. Перетащи в окно папку "src" целиком (заменятся 4 файла: Gfx, Island, SettingsScreen, EffectPreview).
-4. Commit changes.
-5. Вкладка Actions -> дождись зелёной галочки -> скачай новый jar из Artifacts.
+2. На GitHub в репозитории: Add file -> Upload files. Перетащи ВСЁ содержимое папки
+   (src, README.md, build.gradle, INSTALL.txt, CHANGELOG.md), с заменой файлов.
+3. Commit changes.
+4. Вкладка Actions -> дождись зелёной галочки -> скачай новый jar из Artifacts.
 
-Если сборка упала - открой лог Actions и пришли мне текст ошибки (первые строки с "error:").
+Сборка не проверялась на моей стороне (в среде не было Minecraft/Forge).
+Если Actions упал - пришли первые строки лога с "error:".

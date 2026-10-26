@@ -3,5 +3,10 @@
   "key.stolas.next": "Next song",
   "key.stolas.prev": "Previous song",
   "key.stolas.toggle": "Play / pause",
-  "key.categories.stolas": "Player"
+  "key.categories.stolas": "Player",
+  "key.stolas.lyrics": "Lyrics on / off",
+  "key.stolas.sync_up": "Sync offset +0.1 s",
+  "key.stolas.sync_down": "Sync offset -0.1 s",
+  "key.stolas.theme": "Next colour theme",
+  "key.stolas.refetch": "Search lyrics again"
 }

@@ -212,16 +212,7 @@ public final class SystemBridge {
             lyricsStatus = "have (" + s.lyrics.size() + " lines)";
             log("Lyrics already here: " + label(info));
         } else if (Settings.I.autoLyrics) {
-            lyricsStatus = "searching...";
-            log("Searching lyrics: " + label(info));
-            final String title = info.title;
-            final String artist = info.artist;
-            final double len = info.len;
-            POOL.submit(() -> {
-                LyricsSources.Result res = LyricsSources.fetchSynced(title, artist, len);
-                Minecraft.getInstance().execute(() -> applyLyrics(song, title, artist,
-                    res == null ? null : res.lrc, res == null ? "" : res.source));
-            });
+            fetchInto(song, info.title, info.artist, info.len, null);
         } else {
             lyricsStatus = "auto lyrics off";
         }
@@ -232,29 +223,78 @@ public final class SystemBridge {
         return i.artist.isEmpty() ? i.title : i.artist + " - " + i.title;
     }
 
+    /** Looks the lyrics up again for the song that is playing now (hotkey / command). */
+    public static void refetchCurrent() {
+        Song s = trackSong != null ? trackSong : Playback.current;
+        if (s == null) {
+            log("Nothing to search lyrics for");
+            return;
+        }
+        String title = s.title == null || s.title.isBlank() ? s.id : s.title;
+        double dur = len > 0 ? len : Transport.length();
+        fetchInto(s, title, s.artist == null ? "" : s.artist, dur, null);
+    }
+
+    /** "Artist - Title": searches the sites, saves the song and starts it. */
+    public static void searchAndPlay(String text) {
+        String artist = "";
+        String title = text.trim();
+        int dash = title.indexOf(" - ");
+        if (dash > 0) {
+            artist = title.substring(0, dash).trim();
+            title = title.substring(dash + 3).trim();
+        }
+        Song s = SongLibrary.findByTitle(title, artist);
+        if (s == null) {
+            s = new Song();
+            s.id = SongLibrary.safeName(title, artist);
+            s.title = title;
+            s.artist = artist;
+            s.prepare();
+        }
+        final Song song = s;
+        fetchInto(song, title, artist, 0, () -> {
+            if (!song.lyrics.isEmpty()) {
+                Settings.I.source = 0;                     // manual: the song is started by us, not by Spotify
+                Settings.I.lastSong = song.id;
+                Playback.play(song);
+            }
+        });
+    }
+
+    /** Searches in the background, then applies the result on the game thread. */
+    private static void fetchInto(Song song, String title, String artist, double dur, Runnable after) {
+        lyricsStatus = "searching...";
+        String name = artist.isEmpty() ? title : artist + " - " + title;
+        log("Searching lyrics: " + name);
+        version++;
+        POOL.submit(() -> {
+            LyricsSources.Result res = LyricsSources.fetchSynced(title, artist, dur);
+            Minecraft.getInstance().execute(() -> {
+                applyLyrics(song, title, artist, res == null ? null : res.lrc, res == null ? "" : res.source);
+                if (after != null) after.run();
+            });
+        });
+    }
+
     /** Runs on the game thread. */
     private static void applyLyrics(Song song, String title, String artist, String lrc, String from) {
-        boolean current = song == trackSong;
+        boolean current = song == trackSong || song == Playback.current;
         String name = artist.isEmpty() ? title : artist + " - " + title;
-        List<LrcParser.Chunk> chunks = lrc == null ? List.of() : LrcParser.build(LrcParser.parse(lrc), 2, 5.0);
+        List<LrcParser.Chunk> chunks = lrc == null ? List.of()
+            : LrcParser.build(LrcParser.parse(lrc), Settings.I.wordsPerChunk, 5.0);
         if (chunks.isEmpty()) {
             notFound++;
             if (current) lyricsStatus = "not found";
             log("Lyrics not found (tried all sites): " + name);
         } else {
-            song.lyrics.clear();
-            for (LrcParser.Chunk c : chunks) {
-                Song.Line l = new Song.Line();
-                l.time = c.time;
-                l.text = c.text;
-                l.effect = c.effect;
-                l.out = c.out;
-                l.duration = c.duration;
-                song.lyrics.add(l);
-            }
-            song.prepare();
+            song.lrc = lrc;
+            song.applyChunks(chunks);
             downloaded++;
-            if (current) lyricsStatus = "found (" + song.lyrics.size() + " lines, " + from + ")";
+            if (current) {
+                lyricsStatus = "found (" + song.lyrics.size() + " lines, " + from + ")";
+                Playback.generation++;                       // new lines: place them again
+            }
             log("Lyrics downloaded from " + from + " (" + song.lyrics.size() + " lines): " + name);
         }
         // save (also an empty stub, so the folder exists and can be filled by hand) and register the song

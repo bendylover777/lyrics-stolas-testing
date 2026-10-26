@@ -3,6 +3,7 @@ package com.evolyrics;
 import net.minecraftforge.fml.loading.FMLPaths;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
@@ -54,6 +55,7 @@ public final class SongLibrary {
         songs.clear();
         try {
             Files.createDirectories(songsDir());
+            importLrcFiles();
             try (Stream<Path> st = Files.list(songsDir())) {
                 st.filter(Files::isDirectory).sorted().forEach(p -> {
                     Path f = p.resolve("lyrics.json");
@@ -70,6 +72,55 @@ public final class SongLibrary {
             if (songs.isEmpty()) createExample();
         } catch (IOException ignored) {
         }
+    }
+
+    /**
+     * Drop "Artist - Title.lrc" into the songs folder and it becomes a song on the next reload
+     * (the file is moved into its own folder as source.lrc).
+     */
+    private static void importLrcFiles() {
+        try (Stream<Path> st = Files.list(songsDir())) {
+            for (Path f : (Iterable<Path>) st.filter(Files::isRegularFile)::iterator) {
+                String fn = f.getFileName().toString();
+                if (!fn.toLowerCase(Locale.ROOT).endsWith(".lrc")) continue;
+                try {
+                    String base = fn.substring(0, fn.length() - 4);
+                    String text = Files.readString(f, StandardCharsets.UTF_8);
+                    if (text.startsWith("\uFEFF")) text = text.substring(1);
+                    java.util.List<LrcParser.Chunk> chunks = LrcParser.build(LrcParser.parse(text), Settings.I.wordsPerChunk, 5.0);
+                    if (chunks.isEmpty()) continue;
+                    Song s = new Song();
+                    int dash = base.indexOf(" - ");
+                    s.artist = dash > 0 ? base.substring(0, dash).trim() : "";
+                    s.title = dash > 0 ? base.substring(dash + 3).trim() : base.trim();
+                    s.id = safeName(s.title, s.artist);
+                    s.lrc = text;
+                    s.applyChunks(chunks);
+                    Path target = songsDir().resolve(s.id);
+                    Files.createDirectories(target);
+                    s.save(target.resolve("lyrics.json"));
+                    Files.move(f, target.resolve("source.lrc"), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                } catch (Exception ignored) {
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Builds every downloaded song again with the current "words per chunk". Returns how many songs changed. */
+    public static int rechunkAll(int words) {
+        int n = 0;
+        for (Song s : songs.values()) {
+            try {
+                if (s.rechunk(words)) {
+                    save(s);
+                    n++;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        Playback.generation++;
+        return n;
     }
 
     private static void createExample() throws IOException {

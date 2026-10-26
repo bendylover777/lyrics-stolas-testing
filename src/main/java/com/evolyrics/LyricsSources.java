@@ -17,7 +17,8 @@ import java.util.regex.Pattern;
 
 /**
  * Several free sites with time-synced lyrics (LRC). They are tried one after another until one has the song:
- * LRCLIB, NetEase Cloud Music, QQ Music, Kugou. No keys needed. Pure Java, called from a background thread only.
+ * LRCLIB, NetEase Cloud Music, QQ Music, Kugou, Kuwo (each can be switched off in the menu), then plain lyrics
+ * (LRCLIB / lyrics.ovh) with an estimated timing. No keys needed. Pure Java, called from a background thread only.
  * Every site is optional: if it is down or changed its API it is simply skipped.
  */
 public final class LyricsSources {
@@ -84,6 +85,15 @@ public final class LyricsSources {
             public String fetch(String t, String a, double d) throws Exception {
                 return kugou(t, a, d);
             }
+        },
+        new Source() {
+            public String name() {
+                return "Kuwo";
+            }
+
+            public String fetch(String t, String a, double d) throws Exception {
+                return kuwo(t, a, d);
+            }
         });
 
     private LyricsSources() {
@@ -96,9 +106,15 @@ public final class LyricsSources {
         return n;
     }
 
-    /** First site that has synced lyrics for this song, or null. */
+    /**
+     * First site that has synced lyrics for this song, or null. Sites switched off in the menu are skipped.
+     * When no site has synced lyrics and "unsynced fallback" is on, plain lyrics are used with an estimated timing.
+     */
     public static Result fetchSynced(String title, String artist, double duration) {
-        for (Source s : SOURCES) {
+        Settings st = Settings.I;
+        for (int i = 0; i < SOURCES.size(); i++) {
+            if (!st.siteOn(i)) continue;
+            Source s = SOURCES.get(i);
             try {
                 String lrc = clean(s.fetch(title, artist, duration));
                 if (lrc != null) return new Result(lrc, s.name());
@@ -106,7 +122,97 @@ public final class LyricsSources {
                 // site down / blocked / changed: try the next one
             }
         }
+        if (st.allowUnsynced) {
+            try {
+                String lrc = spread(LrcLib.fetchPlain(title, artist, duration), duration);
+                if (lrc != null) return new Result(lrc, "LRCLIB (plain, timing estimated)");
+            } catch (Exception ignored) {
+            }
+            try {
+                String lrc = spread(lyricsOvh(title, artist), duration);
+                if (lrc != null) return new Result(lrc, "lyrics.ovh (plain, timing estimated)");
+            } catch (Exception ignored) {
+            }
+        }
         return null;
+    }
+
+    // ------------------------------------------------------------------ Kuwo
+
+    private static String kuwo(String title, String artist, double dur) throws Exception {
+        String ref = "https://www.kuwo.cn/";
+        String body = http("https://search.kuwo.cn/r.s?client=kt&all=" + enc(query(title, artist))
+            + "&pn=0&rn=10&uid=794762570&ver=kwplayer_ar_9.2.2.1&vipver=1&show_copyright_off=1&newver=1"
+            + "&ft=music&cluster=0&strategy=2012&encoding=utf8&rformat=json&vermerge=1&mobi=1&issubtitle=1", ref);
+        // the answer is "almost JSON" (single quotes): JsonParser.parseString is lenient and accepts it
+        JsonObject root = JsonParser.parseString(body).getAsJsonObject();
+        JsonArray list = arr(root, "abslist");
+        if (list == null) return null;
+        String id = null;
+        double bestDiff = Double.MAX_VALUE;
+        for (JsonElement el : list) {
+            if (!el.isJsonObject()) continue;
+            JsonObject o = el.getAsJsonObject();
+            double diff = score(title, artist, dur, str(o, "SONGNAME"), str(o, "ARTIST"), num(o, "DURATION"));
+            if (diff >= 0 && diff < bestDiff) {
+                bestDiff = diff;
+                id = str(o, "MUSICRID").replace("MUSIC_", "");
+            }
+        }
+        if (id == null || id.isEmpty()) return null;
+        String lyr = http("https://m.kuwo.cn/newh5/singles/songinfoandlrc?musicId=" + enc(id), ref);
+        JsonObject data = obj(JsonParser.parseString(lyr), "data");
+        JsonArray lines = data == null ? null : arr(data, "lrclist");
+        if (lines == null) return null;
+        StringBuilder b = new StringBuilder();
+        for (JsonElement el : lines) {
+            if (!el.isJsonObject()) continue;
+            JsonObject o = el.getAsJsonObject();
+            String text = str(o, "lineLyric").trim();
+            double t = num(o, "time");
+            if (text.isEmpty()) continue;
+            int m = (int) (t / 60);
+            b.append(String.format(Locale.ROOT, "[%02d:%05.2f]%s%n", m, t - m * 60, text));
+        }
+        return b.length() == 0 ? null : b.toString();
+    }
+
+    // ------------------------------------------------------------------ plain lyrics (no time codes)
+
+    private static String lyricsOvh(String title, String artist) throws Exception {
+        String a = enc(firstArtist(artist)).replace("+", "%20");
+        String t = enc(baseTitle(title)).replace("+", "%20");
+        if (a.isEmpty() || t.isEmpty()) return null;
+        String body = http("https://api.lyrics.ovh/v1/" + a + "/" + t, null);
+        String text = str(JsonParser.parseString(body).getAsJsonObject(), "lyrics");
+        return text.isBlank() ? null : text;
+    }
+
+    /**
+     * Plain lyrics -> LRC with an even timing over the song (intro and outro left free).
+     * Not exact, but the sync-offset slider and hotkeys can still move it.
+     */
+    static String spread(String plain, double dur) {
+        if (plain == null || plain.isBlank()) return null;
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        for (String raw : plain.split("\\R")) {
+            String l = raw.trim();
+            if (l.isEmpty()) continue;
+            if (l.startsWith("[") && l.endsWith("]")) continue;      // [Verse 1], [Chorus] ...
+            lines.add(l);
+        }
+        if (lines.size() < 4) return null;
+        double total = dur > 20 ? dur : lines.size() * 3.5 + 12;
+        double start = Math.min(14.0, total * 0.07);
+        double end = total - Math.min(12.0, total * 0.06);
+        double step = Math.max(1.2, (end - start) / lines.size());
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < lines.size(); i++) {
+            double t = start + i * step;
+            int m = (int) (t / 60);
+            b.append(String.format(Locale.ROOT, "[%02d:%05.2f]%s%n", m, t - m * 60, lines.get(i)));
+        }
+        return b.toString();
     }
 
     // ------------------------------------------------------------------ NetEase Cloud Music
@@ -215,14 +321,14 @@ public final class LyricsSources {
         return (baseTitle(title) + " " + firstArtist(artist)).trim();
     }
 
-    private static String firstArtist(String artist) {
+    static String firstArtist(String artist) {
         if (artist == null) return "";
         String[] parts = artist.split("\\s*(?:,|&|;|/|\\bfeat\\.?|\\bft\\.?)\\s*");
         return parts.length == 0 ? "" : parts[0].trim();
     }
 
     /** Title without "(feat. ...)", "[Remastered]" and a trailing " - Remastered 2011". */
-    private static String baseTitle(String t) {
+    static String baseTitle(String t) {
         if (t == null) return "";
         String s = t.replaceAll("[\\(\\[（【][^\\)\\]）】]*[\\)\\]）】]", " ");
         s = s.replaceAll("\\s+-\\s+.*$", "");

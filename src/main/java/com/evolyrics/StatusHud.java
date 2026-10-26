@@ -73,7 +73,7 @@ public final class StatusHud {
         int x = 6;
         int y = 6;
         int h = lines.length * 10 + 6;
-        int glow = st.glowColor & 0xFFFFFF;
+        int glow = Theme.accent();
         g.fill(x - 1, y - 1, x + width + 1, y + h + 1, (0x55 << 24) | glow);
         g.fill(x, y, x + width, y + h, 0xC8080810);
         g.fill(x + 4, y + 5, x + 9, y + 10, dot);
