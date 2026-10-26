@@ -1,11 +1,14 @@
 package com.evolyrics;
 
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.Mth;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -13,6 +16,10 @@ import java.util.Locale;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
+/**
+ * The settings menu. All widgets are drawn by hand (rounded, animated); tabs are switched inside the same screen
+ * (no re-creation), so nothing flickers. Everything is time based, so it is equally smooth at any frame rate.
+ */
 public class SettingsScreen extends Screen {
     private static final String[] TABS = {"Lyrics", "Look", "Anim", "Font", "Music", "Now"};
     private static final String[] PRESET_NAMES = {"Ice", "Pink", "Violet", "Gold", "Mint", "Pure white"};
@@ -20,15 +27,34 @@ public class SettingsScreen extends Screen {
         {0xFFFFFF, 0x7FA8FF}, {0xFFFFFF, 0xFF7ACB}, {0xF2E8FF, 0xA855F7},
         {0xFFF3B0, 0xFFB020}, {0xE8FFE8, 0x4ADE80}, {0xFFFFFF, 0xFFFFFF}};
 
+    private static final int PANEL_HALF = 168;
+    private static final float OPEN_TIME = 0.34f;
+    private static final float CLOSE_TIME = 0.16f;
+
     private static int tab = 0;
-    private TimeSlider timeSlider;
     private static int preset = 0;
-    private static boolean switching = false;
-    private static boolean skipSlide = false;
-    private static long panelStart = 0L;
+
+    // shared with the widgets, set once per frame in render()
+    private static float uiAlpha = 1f;     // panel fade (open / close)
+    private static float uiAge = 10f;      // seconds since the current tab was opened (drives the staggered entry)
+    private static int uiGlow = 0x7FA8FF;
+
+    // "Now" tab: what changed last (to slide the cards in the right direction)
+    private static String lastCurId, lastPrevId, lastNextId;
+    private static long changeNs;
+    private static int changeDir;
 
     private final Screen parent;
-    private final long tabStart;
+    private final long openNs;
+    private long tabNs;
+    private long closeNs;
+    private long lastNs;
+    private boolean closing;
+    private float indX = Float.NaN;
+    private final float[] cardHov = new float[3];
+    private final float[] cardPress = new float[3];
+    private TimeSlider timeSlider;
+
     private final List<AbstractWidget> content = new ArrayList<>();
     private final List<AbstractWidget> header = new ArrayList<>();
     private int panelTop, tabsY, bottom, left, right, colW, contentTop;
@@ -37,25 +63,32 @@ public class SettingsScreen extends Screen {
         super(Component.literal("Stolas Lyrics"));
         this.parent = parent;
         long now = System.nanoTime();
-        if (!switching) panelStart = now;
-        tabStart = skipSlide ? 0L : now;
-        switching = false;
-        skipSlide = false;
+        openNs = now;
+        tabNs = now - 150_000_000L;     // widgets start rising a moment after the panel appears
+        lastNs = now;
+        lastCurId = null;
     }
 
     private void openTab(int t) {
+        if (t == tab) return;
         tab = t;
-        switching = true;
-        minecraft.setScreen(new SettingsScreen(parent));
+        tabNs = System.nanoTime();
+        lastCurId = null;
+        rebuild();
     }
 
-    private void refresh() {
-        switching = true;
-        skipSlide = true;
-        minecraft.setScreen(new SettingsScreen(parent));
+    /** Re-creates the widgets in place (same screen object: no flicker, no restart of the open animation). */
+    private void rebuild() {
+        clearWidgets();
+        setFocused(null);
+        init();
     }
 
     private <T extends AbstractWidget> T add(T w) {
+        int row = Math.max(0, (w.getY() - contentTop) / 22);
+        int ord = row * 2 + (w.getX() >= right ? 1 : 0);
+        if (w instanceof Btn b) b.order = ord;
+        else if (w instanceof Sld s) s.order = ord;
         content.add(w);
         return addRenderableWidget(w);
     }
@@ -68,6 +101,9 @@ public class SettingsScreen extends Screen {
 
     @Override
     protected void init() {
+        content.clear();
+        header.clear();
+        timeSlider = null;
         Settings s = Settings.I;
         colW = 150;
         int gap = 8, h = 20, step = 22;
@@ -77,15 +113,15 @@ public class SettingsScreen extends Screen {
         if (height >= 330) panelTop = Math.max(panelTop, 76);   // room for the expanded island above the panel
         tabsY = panelTop + 56;
 
-        int x2 = width / 2 + 168;
-        addHeader(Button.builder(Component.literal("Done"), b -> onClose())
-            .bounds(x2 - 8 - 46, panelTop + 4, 46, 14).build());
+        int x2 = width / 2 + PANEL_HALF;
+        addHeader(new Btn(x2 - 12 - 46, panelTop + 5, 46, 14, "Done", Btn.ACTION, b -> onClose()));
 
-        int tw = (colW * 2 + gap - (TABS.length - 1) * 4) / TABS.length;
+        int tw = tabW();
         for (int i = 0; i < TABS.length; i++) {
             final int idx = i;
-            addHeader(Button.builder(Component.literal(TABS[i]), b -> openTab(idx))
-                .bounds(left + i * (tw + 4), tabsY, tw, h).build());
+            Btn b = new Btn(left + i * (tw + 4), tabsY, tw, h, TABS[i], Btn.TAB, bb -> openTab(idx));
+            b.selected = i == tab;
+            addHeader(b);
         }
 
         int cy = tabsY + 28;
@@ -99,6 +135,10 @@ public class SettingsScreen extends Screen {
             default -> { }   // "Now" tab is drawn by hand (see drawNow)
         }
         bottom = cy + step * 6 + 14;
+    }
+
+    private int tabW() {
+        return (colW * 2 + 8 - (TABS.length - 1) * 4) / TABS.length;
     }
 
     private void initLyrics(Settings s, int cy, int step, int h) {
@@ -127,12 +167,12 @@ public class SettingsScreen extends Screen {
         add(new FSlider(left, cy + step * 4, colW, h, "Blur", 0f, 1f, s.blur, 2, v -> s.blur = v));
 
         int next = (preset + 1) % PRESETS.length;
-        add(Button.builder(Component.literal("Preset: " + PRESET_NAMES[next]), b -> {
+        add(new Btn(right, cy + step * 4, colW, h, "Preset: " + PRESET_NAMES[next], Btn.ACTION, b -> {
             preset = next;
             s.textColor = PRESETS[next][0];
             s.glowColor = PRESETS[next][1];
-            refresh();
-        }).bounds(right, cy + step * 4, colW, h).build());
+            rebuild();
+        }));
     }
 
     private void initAnim(Settings s, int cy, int step, int h) {
@@ -153,34 +193,36 @@ public class SettingsScreen extends Screen {
         String cur = s.font == null ? "" : s.font;
         for (int i = 0; i < n; i++) {
             final FontList.Entry e = fonts.get(i);
-            boolean sel = e.id.equals(cur);
             int x = (i % 2 == 0) ? left : right;
             int y = cy + (i / 2) * step;
-            add(Button.builder(Component.literal((sel ? "> " : "") + e.label), b -> {
+            Btn b = new Btn(x, y, colW, h, e.label, Btn.OPTION, bb -> {
                 s.font = e.id;
-                refresh();
-            }).bounds(x, y, colW, h).build());
+                rebuild();
+            });
+            b.selected = e.id.equals(cur);
+            b.fontId = e.id;                                  // each entry is shown in its own font
+            add(b);
         }
     }
 
     private void initMusic(Settings s, int cy, int step, int h) {
         add(cycle(left, cy, colW, "Source", () -> Settings.SOURCES[s.source % Settings.SOURCES.length],
             () -> s.source = (s.source + 1) % Settings.SOURCES.length));
-        add(Button.builder(Component.literal("Reload songs"), b -> {
+        add(new Btn(right, cy, colW, h, "Reload songs", Btn.ACTION, b -> {
             String cur = Playback.current == null ? null : Playback.current.id;
             SongLibrary.reload();
             Playback.current = SongLibrary.find(cur);
-        }).bounds(right, cy, colW, h).build());
+        }));
 
         // transport: previous / play-pause / next
         int total = colW * 2 + 8;
         int bw = (total - 8) / 3;
-        add(Button.builder(Component.literal("<<  Prev"), b -> Transport.prev()).bounds(left, cy + step, bw, h).build());
-        add(Button.builder(Component.literal(Playback.isPlaying() ? "Pause" : "Play"), b -> {
+        add(new Btn(left, cy + step, bw, h, "<<  Prev", Btn.ACTION, b -> Transport.prev()));
+        add(new Btn(left + bw + 4, cy + step, bw, h, Playback.isPlaying() ? "Pause" : "Play", Btn.ACTION, b -> {
             Transport.toggle();
             b.setMessage(Component.literal(Playback.isPlaying() ? "Pause" : "Play"));
-        }).bounds(left + bw + 4, cy + step, bw, h).build());
-        add(Button.builder(Component.literal("Next  >>"), b -> Transport.next()).bounds(left + (bw + 4) * 2, cy + step, bw, h).build());
+        }));
+        add(new Btn(left + (bw + 4) * 2, cy + step, bw, h, "Next  >>", Btn.ACTION, b -> Transport.next()));
 
         timeSlider = add(new TimeSlider(left, cy + step * 2, total, h));
 
@@ -196,10 +238,15 @@ public class SettingsScreen extends Screen {
     public void tick() {
         super.tick();
         if (timeSlider != null) timeSlider.sync();
+        if (closing && (System.nanoTime() - closeNs) / 1e9f >= CLOSE_TIME && minecraft != null) {
+            closing = false;
+            minecraft.setScreen(parent);
+        }
     }
 
     @Override
     public boolean keyPressed(int key, int scan, int mods) {
+        if (closing) return true;
         if (ClientEvents.OPEN.matches(key, scan)) {
             onClose();
             return true;
@@ -210,99 +257,98 @@ public class SettingsScreen extends Screen {
     private FSlider colorSlider(int x, int y, String label, int shift, boolean text) {
         Settings s = Settings.I;
         int cur = ((text ? s.textColor : s.glowColor) >> shift) & 0xFF;
-        return new FSlider(x, y, colW, 20, label, 0f, 255f, cur, 0, v -> {
+        FSlider f = new FSlider(x, y, colW, 20, label, 0f, 255f, cur, 0, v -> {
             int c = Math.round(v) & 0xFF;
             int mask = ~(0xFF << shift);
             if (text) s.textColor = (s.textColor & mask) | (c << shift);
             else s.glowColor = (s.glowColor & mask) | (c << shift);
         });
+        f.tint = shift == 16 ? 0xFF6B6B : (shift == 8 ? 0x5BE38A : 0x6BA3FF);   // R / G / B tinted tracks
+        return f;
     }
 
-    private Button toggle(int x, int y, int w, String name, Supplier<Boolean> get, Consumer<Boolean> set) {
-        return Button.builder(Component.literal(name + ": " + (get.get() ? "ON" : "OFF")), b -> {
-            set.accept(!get.get());
-            b.setMessage(Component.literal(name + ": " + (get.get() ? "ON" : "OFF")));
-        }).bounds(x, y, w, 20).build();
+    private Btn toggle(int x, int y, int w, String name, Supplier<Boolean> get, Consumer<Boolean> set) {
+        Btn b = new Btn(x, y, w, 20, name, Btn.TOGGLE, bb -> set.accept(!get.get()));
+        b.on = get;
+        return b;
     }
 
-    private Button cycle(int x, int y, int w, String name, Supplier<String> get, Runnable next) {
-        return Button.builder(Component.literal(name + ": " + get.get()), b -> {
-            next.run();
-            b.setMessage(Component.literal(name + ": " + get.get()));
-        }).bounds(x, y, w, 20).build();
+    private Btn cycle(int x, int y, int w, String name, Supplier<String> get, Runnable next) {
+        Btn b = new Btn(x, y, w, 20, name, Btn.CYCLE, bb -> next.run());
+        b.val = get;
+        return b;
     }
 
-    private static float ease(float p) {
-        if (p < 0f) p = 0f;
-        if (p > 1f) p = 1f;
-        float q = 1f - p;
-        return 1f - q * q * q;
-    }
-
-    private void hover(GuiGraphics g, List<AbstractWidget> list, int mx, int my, int glow) {
-        for (AbstractWidget w : list) {
-            if (w.active && w.isMouseOver(mx, my)) {
-                g.renderOutline(w.getX() - 1, w.getY() - 1, w.getWidth() + 2, w.getHeight() + 2, 0xFF000000 | glow);
-            }
-        }
-    }
+    // ------------------------------------------------------------------ rendering
 
     @Override
     public void render(GuiGraphics g, int mx, int my, float pt) {
-        renderBackground(g);
-        Settings st = Settings.I;
         long now = System.nanoTime();
-        float pAnim = ease((now - panelStart) / 1e9f / 0.15f);
-        float tAnim = ease((now - tabStart) / 1e9f / 0.22f);
-        double secs = now / 1e9;
+        float dt = Math.min(0.1f, (now - lastNs) / 1e9f);
+        lastNs = now;
+        Settings st = Settings.I;
         int glow = st.glowColor & 0xFFFFFF;
-        int pulse = 0x90 + (int) (0x6F * (Math.sin(secs * 2.4) * 0.5 + 0.5));
-        int bgA = (int) (0xD0 * pAnim);
+        double secs = now / 1e9;
 
+        float openP = (now - openNs) / 1e9f / OPEN_TIME;
+        float shut = closing ? Gfx.easeInCubic((now - closeNs) / 1e9f / CLOSE_TIME) : 0f;
+        float pa = Gfx.easeOutCubic(openP) * (1f - shut);
+        uiAlpha = pa;
+        uiAge = (now - tabNs) / 1e9f;
+        uiGlow = glow;
+
+        // soft dim of the world behind the menu (fades together with the panel)
+        g.fillGradient(0, 0, width, height, Gfx.argb(0x000000, 0.42f * pa), Gfx.argb(0x050210, 0.62f * pa));
+        if (pa < 0.01f) return;
+
+        // gentle slide down with a tiny overshoot instead of the old hard bounce
+        float yo = -(1f - Gfx.easeOutBack(openP)) * 28f + shut * 14f;
         g.pose().pushPose();
-        // the panel drops in from above the screen and bounces a little
-        float drop = Gfx.bounce((now - panelStart) / 1e9f / 0.65f);
-        g.pose().translate(0f, -(bottom + 12) * (1f - drop), 0f);
+        g.pose().translate(0f, yo, 0f);
 
-        int x1 = width / 2 - 168, x2 = width / 2 + 168;
+        int x1 = width / 2 - PANEL_HALF, x2 = width / 2 + PANEL_HALF;
         int y1 = panelTop;
-        g.fill(x1 - 2, y1 - 2, x2 + 2, bottom + 2, ((bgA / 6) << 24) | glow);
-        g.fill(x1, y1, x2, bottom, (bgA << 24) | 0x0A0614);
-        g.renderOutline(x1, y1, x2 - x1, bottom - y1, ((int) (pulse * pAnim) << 24) | glow);
+        int pw = x2 - x1, ph = bottom - y1;
+        float pulse = 0.5f + 0.5f * (float) Math.sin(secs * 2.2);
+        Gfx.fillRoundFast(g, x1 - 4, y1 - 4, pw + 8, ph + 8, 14, Gfx.argb(glow, 0.045f * pa));
+        Gfx.fillRoundFast(g, x1 - 2, y1 - 2, pw + 4, ph + 4, 12, Gfx.argb(glow, (0.06f + 0.05f * pulse) * pa));
+        Gfx.fillRound(g, x1 - 1, y1 - 1, pw + 2, ph + 2, 11, Gfx.argb(glow, (0.40f + 0.30f * pulse) * pa));
+        Gfx.fillRound(g, x1, y1, pw, ph, 10, Gfx.argb(0x0B0716, 0.96f * pa));
 
-        // glowing title (left of the header)
-        int tx = x1 + 8;
-        int ty = y1 + 8;
-        int gl = ((int) (0x55 * pAnim) << 24) | glow;
-        g.drawString(font, title, tx - 1, ty, gl, false);
-        g.drawString(font, title, tx + 1, ty, gl, false);
-        g.drawString(font, title, tx, ty - 1, gl, false);
-        g.drawString(font, title, tx, ty + 1, gl, false);
-        g.drawString(font, title, tx, ty, 0xFFFFFFFF, false);
+        // glowing title
+        int tx = x1 + 12;
+        int ty = y1 + 9;
+        int gl = Gfx.argb(glow, 0.30f * pa);
+        if (pa > 0.05f) {
+            g.drawString(font, title, tx - 1, ty, gl, false);
+            g.drawString(font, title, tx + 1, ty, gl, false);
+            g.drawString(font, title, tx, ty - 1, gl, false);
+            g.drawString(font, title, tx, ty + 1, gl, false);
+            g.drawString(font, title, tx, ty, Gfx.argb(0xFFFFFF, pa), false);
+        }
 
         // live effect preview (menu only)
-        EffectPreview.render(g, font, x1 + 8, y1 + 22, x2 - x1 - 16, 30);
+        EffectPreview.render(g, font, x1 + 12, y1 + 22, pw - 24, 30, pa, Math.round(yo));
 
-        // tabs + Done (do not slide)
+        // tabs + Done (do not slide with the content)
         for (AbstractWidget w : header) w.render(g, mx, my, pt);
-        hover(g, header, mx, my, glow);
-        int tw = (colW * 2 + 8 - (TABS.length - 1) * 4) / TABS.length;
-        int ux = left + tab * (tw + 4);
-        g.fill(ux, tabsY + 22, ux + tw, tabsY + 24, 0xFF000000 | glow);
+        int tw = tabW();
+        float targetX = left + tab * (tw + 4);
+        indX = Float.isNaN(indX) ? targetX : Gfx.damp(indX, targetX, 16f, dt);       // the underline glides to the new tab
+        g.fill(left, tabsY + 24, left + colW * 2 + 8, tabsY + 25, Gfx.argb(0xFFFFFF, 0.07f * pa));
+        int iw = tw - 14;
+        Gfx.fillRound(g, Math.round(indX) + 7, tabsY + 23, iw, 2, 1, Gfx.argb(glow, pa));
 
-        // content slides in on tab switch
-        g.pose().pushPose();
-        g.pose().translate((1f - tAnim) * 18f, 0f, 0f);
+        // content (each widget fades / rises in with a small delay, see Btn / Sld)
         super.render(g, mx, my, pt);
-        hover(g, content, mx, my, glow);
+        float ha = Gfx.easeOutCubic((uiAge - 0.25f) / 0.3f) * pa;
         if (tab == 3) {
-            g.drawCenteredString(font, "More fonts: add them in a resource pack", width / 2, contentTop + 134, 0xFF9A8CC0);
+            Gfx.textCentered(g, font, "More fonts: add them in a resource pack", width / 2, contentTop + 134, 0x9A8CC0, ha);
         } else if (tab == 4) {
-            g.drawCenteredString(font, "Keys: Controls > Player (menu, next, previous, pause)", width / 2, contentTop + 132, 0xFF9A8CC0);
+            Gfx.textCentered(g, font, "Keys: Controls > Player (menu, next, previous, pause)", width / 2, contentTop + 132, 0x9A8CC0, ha);
         } else if (tab == 5) {
-            drawNow(g, now, mx, my, glow);
+            drawNow(g, now, dt, mx, my, glow, pa);
         }
-        g.pose().popPose();
 
         g.pose().popPose();
     }
@@ -329,18 +375,14 @@ public class SettingsScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mx, double my, int button) {
+        if (closing) return false;
         if (tab == 5 && button == 0) {
             int hit = pillAt(mx, my);
-            if (hit == 0) {
-                Transport.prev();
-                return true;
-            }
-            if (hit == 1) {
-                Transport.toggle();
-                return true;
-            }
-            if (hit == 2) {
-                Transport.next();
+            if (hit >= 0) {
+                cardPress[hit] = 1f;
+                if (hit == 0) Transport.prev();
+                else if (hit == 1) Transport.toggle();
+                else Transport.next();
                 return true;
             }
         }
@@ -363,8 +405,8 @@ public class SettingsScreen extends Screen {
         return new String(Character.toChars(t.codePointAt(0))).toUpperCase(Locale.ROOT);
     }
 
-    private void drawNow(GuiGraphics g, long now, int mx, int my, int glow) {
-        float since = (now - tabStart) / 1e9f;
+    private void drawNow(GuiGraphics g, long now, float dt, int mx, int my, int glow, float pa) {
+        float since = (now - tabNs) / 1e9f;
         double secs = now / 1e9;
         boolean remote = Transport.isRemote();
         String app = SystemBridge.app.isEmpty() ? "your player" : SystemBridge.app;
@@ -373,67 +415,99 @@ public class SettingsScreen extends Screen {
         Song next = Transport.peek(1);
         int hover = pillAt(mx, my);
 
+        // song changed -> the cards slide in from the side the new song came from
+        String curId = cur == null ? "" : cur.id;
+        if (lastCurId == null) {
+            lastCurId = curId;
+        } else if (!curId.equals(lastCurId)) {
+            changeDir = curId.equals(lastNextId) ? 1 : (curId.equals(lastPrevId) ? -1 : 0);
+            changeNs = now;
+            lastCurId = curId;
+        }
+        lastPrevId = prev == null ? "" : prev.id;
+        lastNextId = next == null ? "" : next.id;
+        float cp = Gfx.easeOutCubic((now - changeNs) / 1e9f / 0.42f);
+        float slide = changeDir * 34f * (1f - cp);
+        float textA = 0.25f + 0.75f * cp;
+
+        for (int i = 0; i < 3; i++) {
+            cardHov[i] = Gfx.damp(cardHov[i], hover == i ? 1f : 0f, 16f, dt);
+            cardPress[i] = Math.max(0f, cardPress[i] - dt * 4.5f);
+        }
+
         for (int i = 0; i < 3; i++) {
             int[] r = pill(i);
-            int order = i == 1 ? 0 : (i == 0 ? 1 : 2);          // now playing drops first
-            float p = (since - 0.09f * order) / 0.5f;
-            float a = Gfx.easeOut(p * 2f);
-            if (a < 0.02f) continue;
-            int dy = Math.round(-26f * (1f - Gfx.bounce(p)));
+            int order = i == 1 ? 0 : (i == 0 ? 1 : 2);          // now playing first, then previous, then next
+            float p = (since - 0.07f * order) / 0.45f;
+            float e = Gfx.easeOutCubic(p);
+            float a = e * pa;
+            if (a < 0.03f) continue;
+            int dy = Math.round((1f - e) * 14f);                 // rises gently into place
+            int sx = Math.round(slide * (i == 1 ? 1f : 0.6f));
+            int gr = Math.round(cardHov[i] * 2f - cardPress[i] * 2f);
+            int x = r[0] + sx - gr, y = r[1] + dy - gr, w = r[2] + gr * 2, h = r[3] + gr * 2;
             if (i == 0) {
-                drawPill(g, r[0], r[1] + dy, r[2], r[3], "PREVIOUS", prev,
-                    remote ? "No history yet" : "Nothing here", false, hover == 0, a, glow, secs);
+                drawPill(g, x, y, w, h, "PREVIOUS", prev,
+                    remote ? "No history yet" : "Nothing here", false, cardHov[i], a, textA, glow, secs);
             } else if (i == 1) {
-                drawPill(g, r[0], r[1] + dy, r[2], r[3], Playback.isPlaying() ? "NOW PLAYING" : "PAUSED", cur,
-                    "Nothing playing", true, hover == 1, a, glow, secs);
+                drawPill(g, x, y, w, h, Playback.isPlaying() ? "NOW PLAYING" : "PAUSED", cur,
+                    "Nothing playing", true, cardHov[i], a, textA, glow, secs);
             } else {
-                drawPill(g, r[0], r[1] + dy, r[2], r[3], "NEXT", next,
-                    remote ? "Chosen by " + app : "Nothing here", false, hover == 2, a, glow, secs);
+                drawPill(g, x, y, w, h, "NEXT", next,
+                    remote ? "Chosen by " + app : "Nothing here", false, cardHov[i], a, textA, glow, secs);
             }
         }
+        float ha = Gfx.easeOutCubic((since - 0.3f) / 0.3f) * pa;
         int hy = contentTop + 114;
-        g.drawCenteredString(font, remote ? "Click Previous / Next to switch the track in " + app
-            : "Click Previous / Next to jump to that song", width / 2, hy, 0xFF9A8CC0);
-        g.drawCenteredString(font, "Shuffle, repeat and the time bar are on the island", width / 2, hy + 10, 0xFF9A8CC0);
+        Gfx.textCentered(g, font, remote ? "Click Previous / Next to switch the track in " + app
+            : "Click Previous / Next to jump to that song", width / 2, hy, 0x9A8CC0, ha);
+        Gfx.textCentered(g, font, "Shuffle, repeat and the time bar are on the island", width / 2, hy + 10, 0x9A8CC0, ha);
     }
 
     private void drawPill(GuiGraphics g, int x, int y, int w, int h, String label, Song song, String empty,
-                          boolean big, boolean hover, float a, int glow, double secs) {
+                          boolean big, float hover, float a, float ta, int glow, double secs) {
         int r = h / 2;
         float pulse = big ? (float) (Math.sin(secs * 2.4) * 0.5 + 0.5) : 0f;
-        float halo = big ? 0.20f + 0.16f * pulse : (hover ? 0.30f : 0.10f);
-        Gfx.fillRound(g, x - 2, y - 2, w + 4, h + 4, r + 2, Gfx.argb(glow, halo * a));
-        Gfx.fillRound(g, x, y, w, h, r, Gfx.fade(0xF0120A22, a));
+        float halo = big ? 0.12f + 0.12f * pulse : 0.04f + 0.18f * hover;
+        Gfx.fillRoundFast(g, x - 2, y - 2, w + 4, h + 4, r + 2, Gfx.argb(glow, halo * a));
+        Gfx.fillRound(g, x, y, w, h, r, Gfx.argb(0x120A22, 0.95f * a));
+        if (hover > 0.02f) Gfx.fillRound(g, x, y, w, h, r, Gfx.argb(glow, 0.12f * hover * a));
+        if (big) Gfx.outlineRound(g, x, y, w, h, r, Gfx.argb(glow, 0.45f * a));
+        else if (hover > 0.03f) Gfx.outlineRound(g, x, y, w, h, r, Gfx.argb(glow, 0.55f * hover * a));
 
         // round "cover" with the first letter
         int dr = r - 4;
         int dcx = x + r;
         int dcy = y + h / 2;
-        Gfx.fillCircle(g, dcx, dcy, dr, Gfx.argb(glow, (big ? 0.85f : 0.40f) * a));
-        g.drawCenteredString(font, song == null ? "-" : initial(song), dcx, dcy - 4, Gfx.argb(0xFFFFFF, a));
+        Gfx.fillCircle(g, dcx, dcy, dr, Gfx.argb(glow, (big ? 0.85f : 0.40f + 0.25f * hover) * a));
+        Gfx.textCentered(g, font, song == null ? "-" : initial(song), dcx, dcy - 4, 0xFFFFFF, a);
 
         int tx = x + h + 2;
         int maxW = x + w - r - 6 - tx;
-        g.pose().pushPose();
-        g.pose().translate(tx, y + (big ? 6 : 4), 0f);
-        g.pose().scale(0.75f, 0.75f, 1f);
-        g.drawString(font, label, 0, 0, Gfx.argb(big ? glow : 0xB8C0FF, 0.9f * a), false);
-        g.pose().popPose();
+        float la = 0.9f * a;
+        if (la >= 0.03f) {
+            g.pose().pushPose();
+            g.pose().translate(tx, y + (big ? 6 : 4), 0f);
+            g.pose().scale(0.75f, 0.75f, 1f);
+            g.drawString(font, label, 0, 0, Gfx.argb(big ? glow : 0xB8C0FF, la), false);
+            g.pose().popPose();
+        }
 
+        float sa = a * ta;
         if (song == null) {
-            g.drawString(font, clip(empty, maxW), tx, y + (big ? 17 : 13), Gfx.argb(0x9A8CC0, a), false);
+            Gfx.text(g, font, clip(empty, maxW), tx, y + (big ? 17 : 13), 0x9A8CC0, sa);
             return;
         }
         String title = clip(nameOf(song), maxW);
         int ty = y + (big ? 15 : 12);
-        g.drawString(font, title, tx, ty, Gfx.argb(0xFFFFFF, a), false);
+        Gfx.text(g, font, title, tx, ty, 0xFFFFFF, sa);
         String artist = song.artist == null ? "" : song.artist;
         if (!artist.isBlank()) {
             if (big) {
-                g.drawString(font, clip(artist, maxW), tx, ty + 10, Gfx.argb(0xB8C0FF, 0.85f * a), false);
+                Gfx.text(g, font, clip(artist, maxW), tx, ty + 10, 0xB8C0FF, 0.85f * sa);
             } else {
                 int used = font.width(title) + 8;
-                if (maxW - used > 24) g.drawString(font, clip(artist, maxW - used), tx + used, ty, Gfx.argb(0xB8C0FF, 0.7f * a), false);
+                if (maxW - used > 24) Gfx.text(g, font, clip(artist, maxW - used), tx + used, ty, 0xB8C0FF, 0.7f * sa);
             }
         }
         if (big) {
@@ -442,14 +516,17 @@ public class SettingsScreen extends Screen {
             double pos = Playback.position();
             float frac = len > 0 ? (float) Math.min(1.0, Math.max(0.0, pos / len)) : 0f;
             String time = TimeSlider.fmt(pos) + " / " + (len > 0 ? TimeSlider.fmt(len) : "--:--");
-            g.pose().pushPose();
-            g.pose().translate(x + w - r - 6 - font.width(time) * 0.75f, y + 6, 0f);
-            g.pose().scale(0.75f, 0.75f, 1f);
-            g.drawString(font, time, 0, 0, Gfx.argb(0xB8C0FF, 0.9f * a), false);
-            g.pose().popPose();
+            float ta2 = 0.9f * a;
+            if (ta2 >= 0.03f) {
+                g.pose().pushPose();
+                g.pose().translate(x + w - r - 6 - font.width(time) * 0.75f, y + 6, 0f);
+                g.pose().scale(0.75f, 0.75f, 1f);
+                g.drawString(font, time, 0, 0, Gfx.argb(0xB8C0FF, ta2), false);
+                g.pose().popPose();
+            }
             int bw = Math.max(10, maxW);
-            Gfx.fillRound(g, tx, y + h - 8, bw, 2, 1, Gfx.argb(0xFFFFFF, 0.22f * a));
-            Gfx.fillRound(g, tx, y + h - 8, Math.max(2, Math.round(bw * frac)), 2, 1, Gfx.argb(glow, a));
+            Gfx.fillRound(g, tx, y + h - 9, bw, 3, 1, Gfx.argb(0xFFFFFF, 0.22f * a));
+            Gfx.fillRound(g, tx, y + h - 9, Math.max(3, Math.round(bw * frac)), 3, 1, Gfx.argb(glow, a));
         }
     }
 
@@ -463,36 +540,233 @@ public class SettingsScreen extends Screen {
         Settings.save();
     }
 
+    /** Closing plays a short fade; the screen is really closed from tick(). */
     @Override
     public void onClose() {
-        minecraft.setScreen(parent);
+        if (closing) return;
+        closing = true;
+        closeNs = System.nanoTime();
+    }
+
+    // ------------------------------------------------------------------ widgets
+
+    private static float entry(int order) {
+        return order < 0 ? 1f : Gfx.easeOutCubic((uiAge - order * 0.03f) / 0.30f);
+    }
+
+    /** Soft rounded field behind a widget; the accent outline fades in on hover. */
+    private static void field(GuiGraphics g, int x, int y, int w, int h, float hover, float a, float extra, int accent) {
+        Gfx.fillRoundFast(g, x, y, w, h, 4, Gfx.argb(0xFFFFFF, (0.055f + 0.07f * hover + extra) * a));
+        if (hover > 0.03f) Gfx.outlineRound(g, x, y, w, h, 4, Gfx.argb(accent, 0.70f * hover * a));
+    }
+
+    private static final class Btn extends Button {
+        static final int ACTION = 0, TOGGLE = 1, CYCLE = 2, TAB = 3, OPTION = 4;
+
+        final int kind;
+        final String label;
+        Supplier<Boolean> on = () -> false;
+        Supplier<String> val = () -> "";
+        boolean selected;
+        String fontId = "";
+        int order = -1;
+        float hover, press, knob = -1f;
+        long lastNs = System.nanoTime();
+
+        Btn(int x, int y, int w, int h, String label, int kind, OnPress onPress) {
+            super(x, y, w, h, Component.literal(label), onPress, DEFAULT_NARRATION);
+            this.kind = kind;
+            this.label = label;
+        }
+
+        @Override
+        public void onPress() {
+            press = 1f;
+            super.onPress();
+        }
+
+        @Override
+        public void renderWidget(GuiGraphics g, int mx, int my, float pt) {
+            long now = System.nanoTime();
+            float dt = Math.min(0.1f, (now - lastNs) / 1e9f);
+            lastNs = now;
+            int x = getX(), y = getY(), w = getWidth(), h = getHeight();
+            boolean over = active && mx >= x && mx < x + w && my >= y && my < y + h;
+            hover = Gfx.damp(hover, over ? 1f : 0f, 18f, dt);
+            press = Math.max(0f, press - dt * 5f);
+            boolean isOn = kind == TOGGLE && on.get();
+            if (knob < 0f) knob = isOn ? 1f : 0f;
+            knob = Gfx.damp(knob, isOn ? 1f : 0f, 16f, dt);
+
+            float e = entry(order);
+            float a = e * uiAlpha;
+            if (a < 0.03f) return;
+            Font font = Minecraft.getInstance().font;
+            int glow = uiGlow;
+            int soft = Gfx.lerpRgb(glow, 0xFFFFFF, 0.55f);
+
+            g.pose().pushPose();
+            g.pose().translate(0f, (1f - e) * 6f, 0f);
+            int sh = Math.round(press * 1.5f);                  // a quick "squeeze" when pressed
+            int bx = x + sh, by = y + sh, bw = w - sh * 2, bh = h - sh * 2;
+            int ty = by + (bh - 8) / 2;
+
+            switch (kind) {
+                case TOGGLE -> {
+                    field(g, bx, by, bw, bh, hover, a, 0f, glow);
+                    Gfx.text(g, font, label, bx + 8, ty, Gfx.lerpRgb(0xC9C5E0, 0xFFFFFF, hover), a);
+                    int tw = 24, th = 12;
+                    int sx = bx + bw - 8 - tw, sy = by + (bh - th) / 2;
+                    int track = Gfx.lerpArgb(Gfx.argb(0x3A3555, a), Gfx.argb(glow, a), knob);
+                    Gfx.fillRound(g, sx, sy, tw, th, th / 2, track);
+                    int kx = sx + 6 + Math.round(knob * 12f);
+                    Gfx.fillCircle(g, kx, sy + th / 2, 4, Gfx.argb(Gfx.lerpRgb(0xB9B5D2, 0xFFFFFF, knob), a));
+                }
+                case CYCLE -> {
+                    field(g, bx, by, bw, bh, hover, a, 0f, glow);
+                    Gfx.text(g, font, label, bx + 8, ty, 0xB4B0CF, a);
+                    String v = val.get();
+                    int maxV = bw - 16 - font.width(label) - 8;
+                    if (font.width(v) > maxV) v = font.plainSubstrByWidth(v, Math.max(0, maxV - font.width("..."))) + "...";
+                    Gfx.text(g, font, v, bx + bw - 8 - font.width(v), ty, Gfx.lerpRgb(soft, 0xFFFFFF, hover), a);
+                }
+                case TAB -> {
+                    float bg = 0.07f * hover + (selected ? 0.08f : 0f);
+                    if (bg > 0.005f) Gfx.fillRoundFast(g, bx, by, bw, bh, 4, Gfx.argb(0xFFFFFF, bg * a));
+                    String m = getMessage().getString();
+                    int col = Gfx.lerpRgb(0x8F8BB0, 0xFFFFFF, Math.max(selected ? 1f : 0f, hover * 0.85f));
+                    Gfx.text(g, font, m, bx + (bw - font.width(m)) / 2, ty, col, a);
+                }
+                case OPTION -> {
+                    field(g, bx, by, bw, bh, hover, a, selected ? 0.05f : 0f, glow);
+                    if (selected) Gfx.outlineRound(g, bx, by, bw, bh, 4, Gfx.argb(glow, 0.55f * a));
+                    int col = selected ? soft : Gfx.lerpRgb(0xD6D2EE, 0xFFFFFF, hover);
+                    if (fontId.isEmpty()) {
+                        Gfx.text(g, font, label, bx + 8, ty, col, a);
+                    } else if (a >= 0.03f) {
+                        g.drawString(font, Song.styledComponent(label, fontId), bx + 8, ty, Gfx.argb(col, a), false);
+                    }
+                    if (selected) Gfx.fillCircle(g, bx + bw - 12, by + bh / 2, 3, Gfx.argb(glow, a));
+                }
+                default -> {
+                    field(g, bx, by, bw, bh, hover, a, 0f, glow);
+                    String m = getMessage().getString();
+                    Gfx.text(g, font, m, bx + (bw - font.width(m)) / 2, ty, Gfx.lerpRgb(0xD6D2EE, 0xFFFFFF, hover), a);
+                }
+            }
+            g.pose().popPose();
+        }
+    }
+
+    /** Slider: label left, value right, thin rounded track with a knob that grows under the mouse. */
+    private abstract static class Sld extends AbstractSliderButton {
+        int order = -1;
+        int tint = -1;
+        float hover, knob;
+        boolean drag;
+        long lastNs = System.nanoTime();
+
+        Sld(int x, int y, int w, int h, double value) {
+            super(x, y, w, h, Component.empty(), value);
+        }
+
+        abstract String name();
+
+        abstract String valueText();
+
+        @Override
+        protected void updateMessage() {
+        }
+
+        private void setFrom(double mx) {
+            double v = Mth.clamp((mx - (getX() + 8)) / (double) (getWidth() - 16), 0.0, 1.0);
+            if (v != this.value) {
+                this.value = v;
+                applyValue();
+            }
+        }
+
+        @Override
+        public void onClick(double mx, double my) {
+            drag = true;
+            setFrom(mx);
+        }
+
+        @Override
+        protected void onDrag(double mx, double my, double dx, double dy) {
+            setFrom(mx);
+        }
+
+        @Override
+        public void onRelease(double mx, double my) {
+            drag = false;
+            super.onRelease(mx, my);
+        }
+
+        @Override
+        public void renderWidget(GuiGraphics g, int mx, int my, float pt) {
+            long now = System.nanoTime();
+            float dt = Math.min(0.1f, (now - lastNs) / 1e9f);
+            lastNs = now;
+            int x = getX(), y = getY(), w = getWidth(), h = getHeight();
+            boolean over = active && mx >= x && mx < x + w && my >= y && my < y + h;
+            hover = Gfx.damp(hover, over ? 1f : 0f, 18f, dt);
+            knob = Gfx.damp(knob, (over || drag) ? 1f : 0f, 20f, dt);
+
+            float e = entry(order);
+            float a = e * uiAlpha;
+            if (a < 0.03f) return;
+            Font font = Minecraft.getInstance().font;
+            int glow = uiGlow;
+            int fillRgb = tint >= 0 ? tint : glow;
+
+            g.pose().pushPose();
+            g.pose().translate(0f, (1f - e) * 6f, 0f);
+            field(g, x, y, w, h, hover, a, 0f, glow);
+            Gfx.text(g, font, name(), x + 8, y + 3, Gfx.lerpRgb(0xB4B0CF, 0xFFFFFF, hover), a);
+            String v = valueText();
+            Gfx.text(g, font, v, x + w - 8 - font.width(v), y + 3, 0xFFFFFF, a);
+
+            int tx0 = x + 8, tw = w - 16, ty = y + h - 7;
+            int fw = Math.round(tw * (float) this.value);
+            Gfx.fillRound(g, tx0, ty, tw, 4, 2, Gfx.argb(0xFFFFFF, 0.12f * a));
+            if (fw > 0) Gfx.fillRound(g, tx0, ty, Math.max(4, fw), 4, 2, Gfx.argb(fillRgb, a));
+            int kr = Math.round(knob * 4f);
+            if (kr > 0) {
+                Gfx.fillCircle(g, tx0 + fw, ty + 2, kr + 1, Gfx.argb(fillRgb, 0.35f * a));
+                Gfx.fillCircle(g, tx0 + fw, ty + 2, kr, Gfx.argb(0xFFFFFF, a));
+            }
+            g.pose().popPose();
+        }
     }
 
     /** Position slider: drag to jump; the real player is told when you let go. */
-    private static final class TimeSlider extends AbstractSliderButton {
-        private boolean dragging;
-
+    private static final class TimeSlider extends Sld {
         TimeSlider(int x, int y, int w, int h) {
-            super(x, y, w, h, Component.empty(), 0.0);
+            super(x, y, w, h, 0.0);
             sync();
         }
 
-        private static String fmt(double sec) {
+        static String fmt(double sec) {
             int t = (int) Math.max(0, sec);
             return String.format(Locale.ROOT, "%d:%02d", t / 60, t % 60);
         }
 
         void sync() {
-            if (dragging) return;
+            if (drag) return;
             double len = Transport.length();
             this.value = len <= 0 ? 0.0 : Math.min(1.0, Math.max(0.0, Playback.position() / len));
-            updateMessage();
         }
 
         @Override
-        protected void updateMessage() {
+        String name() {
+            return "Time";
+        }
+
+        @Override
+        String valueText() {
             double len = Transport.length();
-            setMessage(Component.literal("Time  " + fmt(this.value * len) + " / " + (len > 0 ? fmt(len) : "--:--")));
+            return fmt(this.value * len) + " / " + (len > 0 ? fmt(len) : "--:--");
         }
 
         @Override
@@ -502,34 +776,26 @@ public class SettingsScreen extends Screen {
         }
 
         @Override
-        public void onClick(double mx, double my) {
-            dragging = true;
-            super.onClick(mx, my);
-        }
-
-        @Override
         public void onRelease(double mx, double my) {
             super.onRelease(mx, my);
-            dragging = false;
             double len = Transport.length();
             if (len > 0) Transport.seekRemote(this.value * len);
         }
     }
 
-    private static final class FSlider extends AbstractSliderButton {
+    private static final class FSlider extends Sld {
         private final String name;
         private final float min, max;
         private final int decimals;
         private final Consumer<Float> set;
 
         FSlider(int x, int y, int w, int h, String name, float min, float max, float val, int decimals, Consumer<Float> set) {
-            super(x, y, w, h, Component.empty(), (val - min) / (max - min));
+            super(x, y, w, h, (val - min) / (max - min));
             this.name = name;
             this.min = min;
             this.max = max;
             this.decimals = decimals;
             this.set = set;
-            updateMessage();
         }
 
         private float get() {
@@ -537,8 +803,13 @@ public class SettingsScreen extends Screen {
         }
 
         @Override
-        protected void updateMessage() {
-            setMessage(Component.literal(name + ": " + String.format(Locale.ROOT, "%." + decimals + "f", get())));
+        String name() {
+            return name;
+        }
+
+        @Override
+        String valueText() {
+            return String.format(Locale.ROOT, "%." + decimals + "f", get());
         }
 
         @Override

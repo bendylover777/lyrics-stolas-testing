@@ -14,7 +14,7 @@ import java.util.Locale;
 /**
  * iPhone-style "dynamic island": song title on top (marquee if long) and a running
  * lyrics ticker underneath that glides to the current line.
- * While any menu / chat / inventory is open (mouse is free) the island grows and shows a player:
+ * While any menu / chat / inventory is open (mouse is free) the island grows (spring animation) and shows a player:
  * progress bar and shuffle, previous, play/pause, next, repeat buttons you can click.
  */
 public final class Island {
@@ -25,6 +25,8 @@ public final class Island {
     private static final int TICK_GAP = 7;
     private static final int EXTRA = 44;      // extra height of the player part
     private static final int EXP_W = 200;     // minimal width when expanded
+    private static final int BTN_N = 5;       // shuffle, prev, play, next, repeat
+    private static final int HIT_R = 12;
 
     private static Song cachedSong;
     private static String cachedFull = "";
@@ -32,10 +34,18 @@ public final class Island {
     private static int cachedW = 0;
     private static boolean cachedHas = false;
     private static float anim;
-    private static float expand;
     private static long last = System.nanoTime();
 
-    // click areas of the last drawn frame (valid only while the player part is fully open)
+    // spring that drives the expand / collapse (can overshoot a little = lively, never jerky)
+    private static float expPos, expVel;
+    // smoothed size of the compact body, so a new song does not make the island jump
+    private static float wBase = -1f, hBase = -1f;
+    // little animations of the player part
+    private static final float[] hov = new float[BTN_N];
+    private static final float[] pls = new float[BTN_N];
+    private static float playMix, shufMix, repMix, barHov, eqAmt;
+
+    // click areas of the last drawn frame (valid only while the player part is open)
     private static boolean hitsOn;
     private static int hShuffleX, hPrevX, hPlayX, hNextX, hRepeatX, hCtlY;
     private static int barX, barY, barW;
@@ -80,21 +90,34 @@ public final class Island {
     /** Mouse click on a screen. Returns true when the island used it. */
     public static boolean click(double mx, double my, int button) {
         if (button != 0 || !hitsOn) return false;
+        int hit = -1;
+        if (near(mx, my, hShuffleX, hCtlY, HIT_R)) hit = 0;
+        else if (near(mx, my, hPrevX, hCtlY, HIT_R)) hit = 1;
+        else if (near(mx, my, hPlayX, hCtlY, HIT_R)) hit = 2;
+        else if (near(mx, my, hNextX, hCtlY, HIT_R)) hit = 3;
+        else if (near(mx, my, hRepeatX, hCtlY, HIT_R)) hit = 4;
         boolean used = true;
-        if (near(mx, my, hShuffleX, hCtlY, 11)) Transport.toggleShuffle();
-        else if (near(mx, my, hPrevX, hCtlY, 11)) Transport.prev();
-        else if (near(mx, my, hPlayX, hCtlY, 11)) Transport.toggle();
-        else if (near(mx, my, hNextX, hCtlY, 11)) Transport.next();
-        else if (near(mx, my, hRepeatX, hCtlY, 11)) Transport.cycleRepeat();
-        else if (mx >= barX - 2 && mx <= barX + barW + 2 && my >= barY - 4 && my <= barY + 7) {
-            double len = Transport.length();
-            if (len > 0 && barW > 0) {
-                double sec = Math.max(0.0, Math.min(1.0, (mx - barX) / barW)) * len;
-                Transport.seekLocal(sec);
-                Transport.seekRemote(sec);
+        switch (hit) {
+            case 0 -> Transport.toggleShuffle();
+            case 1 -> Transport.prev();
+            case 2 -> Transport.toggle();
+            case 3 -> Transport.next();
+            case 4 -> Transport.cycleRepeat();
+            default -> {
+                if (mx >= barX - 2 && mx <= barX + barW + 2 && my >= barY - 5 && my <= barY + 8) {
+                    double len = Transport.length();
+                    if (len > 0 && barW > 0) {
+                        double sec = Math.max(0.0, Math.min(1.0, (mx - barX) / barW)) * len;
+                        Transport.seekLocal(sec);
+                        Transport.seekRemote(sec);
+                    }
+                } else {
+                    used = false;
+                }
             }
-        } else used = false;
+        }
         if (used) {
+            if (hit >= 0) pls[hit] = 1f;     // ripple on the pressed button
             Minecraft.getInstance().getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK, 1.0F));
         }
         return used;
@@ -117,15 +140,30 @@ public final class Island {
         Settings st = Settings.I;
         Song s = Playback.current;
         boolean show = st.island && s != null;
-        anim += (show ? dt : -dt) * 4f;
+        anim += (show ? dt : -dt) * 3.2f;
         if (anim > 1f) anim = 1f;
-        expand += ((show && interactive) ? dt : -dt) * 5f;
-        if (expand > 1f) expand = 1f;
-        if (expand < 0f) expand = 0f;
+        if (anim < 0f) anim = 0f;
+
+        // expand / collapse spring (sub-stepped, so it behaves the same at 20 and at 240 fps)
+        float target = (show && interactive) ? 1f : 0f;
+        float rem = dt;
+        while (rem > 0f) {
+            float stp = Math.min(rem, 0.008f);
+            expVel += ((target - expPos) * 190f - expVel * 21f) * stp;
+            expPos += expVel * stp;
+            rem -= stp;
+        }
+        if (Math.abs(target - expPos) < 0.002f && Math.abs(expVel) < 0.05f) {
+            expPos = target;
+            expVel = 0f;
+        }
+
         hitsOn = false;
-        if (anim <= 0.001f) {
-            anim = 0f;
-            expand = 0f;
+        if (anim <= 0.03f) {              // nearly invisible: skip drawing (faint text would flash at full alpha)
+            if (!show) {
+                expPos = 0f;
+                expVel = 0f;
+            }
             return;
         }
 
@@ -146,67 +184,85 @@ public final class Island {
         boolean overflow = cachedW > MAX_TEXT;
         boolean scroll = st.islandScroll && overflow;
         int tw = cachedHas ? MAX_TEXT : Math.min(cachedW, MAX_TEXT);
-        int baseH = cachedHas ? 32 : 20;
-        float ee = Gfx.easeOut(expand);
+        float tgtW = tw + 52;
+        float tgtH = cachedHas ? 32 : 20;
+        if (wBase < 0f) {
+            wBase = tgtW;
+            hBase = tgtH;
+        } else {
+            wBase = Gfx.damp(wBase, tgtW, 13f, dt);
+            hBase = Gfx.damp(hBase, tgtH, 13f, dt);
+        }
+        int baseH = Math.round(hBase);
+        int baseW = Math.round(wBase);
+
+        float ee = Math.max(0f, Math.min(1.08f, expPos));        // may overshoot a bit on purpose
+        float e = 1f - (1f - anim) * (1f - anim);                  // show / hide fade + slide
         int h = baseH + Math.round(EXTRA * ee);
-        int baseW = tw + 52;
         int w = Math.round(baseW + (Math.max(baseW, EXP_W) - baseW) * ee);
         int rad = Math.min(h / 2, 16);
-        float e = 1f - (1f - anim) * (1f - anim);
-        int x = (sw - w) / 2;
+        int x = Math.round((sw - w) / 2f);
         int y = Math.round(5 - (1f - e) * 40);
         int glowRgb = st.glowColor & 0xFFFFFF;
         int textRgb = st.textColor & 0xFFFFFF;
 
         double t = now / 1e9;
-        int pulse = 0x55 + (int) (0x22 * (Math.sin(t * 3.0) * 0.5 + 0.5));
-        Gfx.fillRound(g, x - 2, y - 2, w + 4, h + 4, rad + 2, (0x22 << 24) | glowRgb);
-        Gfx.fillRound(g, x - 1, y - 1, w + 2, h + 2, rad + 1, (pulse << 24) | glowRgb);
-        Gfx.fillRound(g, x, y, w, h, rad, 0xF2000000);
+        float pulse = 0.34f + 0.12f * (float) (Math.sin(t * 3.0) * 0.5 + 0.5);
+        Gfx.fillRoundFast(g, x - 2, y - 2, w + 4, h + 4, rad + 2, Gfx.argb(glowRgb, 0.14f * e));
+        Gfx.fillRoundFast(g, x - 1, y - 1, w + 2, h + 2, rad + 1, Gfx.argb(glowRgb, pulse * e));
+        Gfx.fillRound(g, x, y, w, h, rad, Gfx.argb(0x000000, 0.95f * e));
 
         // icon
         int iy = y + (baseH - 12) / 2;
-        fillPill(g, x + 8, iy, 12, 12, 0xFF000000 | glowRgb);
-        fillPill(g, x + 12, iy + 4, 4, 4, 0xFFFFFFFF);
+        Gfx.fillPill(g, x + 8, iy, 12, 12, Gfx.argb(glowRgb, e));
+        Gfx.fillPill(g, x + 12, iy + 4, 4, 4, Gfx.argb(0xFFFFFF, e));
 
         // title row
         int tx = x + 26;
         int ty = cachedHas ? y + 5 : y + 6;
         int rowH = cachedHas ? 15 : baseH;
+        int white = Gfx.argb(0xFFFFFF, e);
         if (scroll) {
             double cycle = cachedW + GAP;
             double period = cycle / SPEED + PAUSE;
             double phase = t % period;
-            int off = phase < PAUSE ? 0 : (int) Math.round((phase - PAUSE) * SPEED);
+            float off = phase < PAUSE ? 0f : (float) ((phase - PAUSE) * SPEED);
             g.enableScissor(tx, y, tx + tw, y + rowH);
-            g.drawString(font, cachedFull, tx - off, ty, 0xFFFFFFFF, false);
-            g.drawString(font, cachedFull, tx - off + (int) cycle, ty, 0xFFFFFFFF, false);
+            g.pose().pushPose();
+            g.pose().translate(-off, 0f, 0f);          // float offset: the text glides instead of stepping per pixel
+            g.drawString(font, cachedFull, tx, ty, white, false);
+            g.drawString(font, cachedFull, tx + (int) cycle, ty, white, false);
+            g.pose().popPose();
             g.disableScissor();
         } else {
-            g.drawString(font, overflow ? cachedShort : cachedFull, tx, ty, 0xFFFFFFFF, false);
+            g.drawString(font, overflow ? cachedShort : cachedFull, tx, ty, white, false);
         }
 
         // running lyrics ticker
         if (cachedHas && s != null && tickSong == s && tickCount > 0) {
-            g.fill(tx, y + 16, tx + tw, y + 17, (0x30 << 24) | glowRgb);
-            drawTicker(g, font, s, tx, y, tw, baseH, glowRgb);
+            g.fill(tx, y + 16, tx + tw, y + 17, Gfx.argb(glowRgb, 0.19f * e));
+            drawTicker(g, font, s, tx, y, tw, baseH, e);
         }
 
-        // equalizer
+        // equalizer (calms down smoothly on pause)
         boolean playing = Playback.isPlaying();
+        eqAmt = Gfx.damp(eqAmt, playing ? 1f : 0f, 9f, dt);
         int bx = x + w - 8 - 11;
         int base = y + baseH / 2 + 5;
+        int eqCol = Gfx.argb(textRgb, e);
         for (int i = 0; i < 4; i++) {
-            int bh = playing ? 3 + (int) ((Math.sin(t * 7 + i * 1.7) + 1) * 3.5) : 3;
-            g.fill(bx + i * 3, base - bh, bx + i * 3 + 2, base, 0xFF000000 | textRgb);
+            int bh = 3 + Math.round(eqAmt * (float) ((Math.sin(t * 7 + i * 1.7) + 1) * 3.5));
+            g.fill(bx + i * 3, base - bh, bx + i * 3 + 2, base, eqCol);
         }
 
         // player part (only while a menu is open)
-        if (ee > 0.5f) drawPlayer(g, font, x, y, w, baseH, Gfx.clamp01((ee - 0.5f) / 0.5f), mx, my, glowRgb, textRgb);
+        float ea = Gfx.clamp01((ee - 0.35f) / 0.55f);
+        ea = ea * ea * (3f - 2f * ea) * e;
+        if (ea > 0.02f) drawPlayer(g, font, x, y, w, baseH, ea, dt, mx, my, glowRgb, ee > 0.85f);
     }
 
-    private static void drawPlayer(GuiGraphics g, Font font, int x, int y, int w, int baseH, float ea,
-                                   int mx, int my, int glowRgb, int textRgb) {
+    private static void drawPlayer(GuiGraphics g, Font font, int x, int y, int w, int baseH, float ea, float dt,
+                                   int mx, int my, int glowRgb, boolean clickable) {
         int top = y + baseH;
         g.fill(x + 12, top, x + w - 12, top + 1, Gfx.argb(glowRgb, 0.20f * ea));
 
@@ -221,48 +277,69 @@ public final class Island {
         int bx0 = x + 12 + tlw + 5;
         int bx1 = x + w - 12 - trw - 5;
         int by = top + 7;
-        int timeCol = Gfx.argb(0xB8C0FF, ea);
-        g.drawString(font, tl, x + 12, top + 4, timeCol, false);
-        g.drawString(font, tr, x + w - 12 - trw, top + 4, timeCol, false);
+        Gfx.text(g, font, tl, x + 12, top + 4, 0xB8C0FF, ea);
+        Gfx.text(g, font, tr, x + w - 12 - trw, top + 4, 0xB8C0FF, ea);
         int bw = Math.max(10, bx1 - bx0);
-        boolean overBar = mx >= bx0 - 2 && mx <= bx0 + bw + 2 && my >= by - 4 && my <= by + 7;
-        Gfx.fillRound(g, bx0, by, bw, 3, 1, Gfx.argb(0xFFFFFF, 0.25f * ea));
-        int fw = Math.max(2, Math.round(bw * frac));
-        Gfx.fillRound(g, bx0, by, fw, 3, 1, Gfx.argb(0xFFFFFF, ea));
-        if (overBar) Gfx.fillCircle(g, bx0 + fw, by + 1, 3, Gfx.argb(0xFFFFFF, ea));
+        boolean overBar = mx >= bx0 - 2 && mx <= bx0 + bw + 2 && my >= by - 5 && my <= by + 8;
+        barHov = Gfx.damp(barHov, overBar ? 1f : 0f, 16f, dt);
+        int thick = 3 + Math.round(barHov * 2f);                  // the bar swells under the mouse
+        int ty0 = by + 1 - thick / 2;
+        Gfx.fillRound(g, bx0, ty0, bw, thick, thick / 2, Gfx.argb(0xFFFFFF, 0.25f * ea));
+        int fw = Math.max(thick, Math.round(bw * frac));
+        Gfx.fillRound(g, bx0, ty0, fw, thick, thick / 2, Gfx.argb(0xFFFFFF, ea));
+        int kr = Math.round(barHov * 4f);
+        if (kr > 0) Gfx.fillCircle(g, bx0 + fw, by + 1, kr, Gfx.argb(0xFFFFFF, ea));
 
         // buttons
         int cy = top + 28;
         int cx = x + w / 2;
         int dx = 38;
+        int[] bxs = {cx - 2 * dx, cx - dx, cx, cx + dx, cx + 2 * dx};
+        for (int i = 0; i < BTN_N; i++) {
+            boolean over = near(mx, my, bxs[i], cy, HIT_R);
+            hov[i] = Gfx.damp(hov[i], over ? 1f : 0f, 16f, dt);
+            pls[i] = Math.max(0f, pls[i] - dt * 4.5f);
+            // soft round highlight under the icon + a ripple after a click
+            if (hov[i] > 0.02f && i != 2) Gfx.fillCircle(g, bxs[i], cy, HIT_R, Gfx.argb(0xFFFFFF, 0.10f * hov[i] * ea));
+            if (pls[i] > 0.02f) {
+                int rr = Math.round(HIT_R + 5f * (1f - pls[i]));
+                Gfx.fillCircle(g, bxs[i], cy, rr, Gfx.argb(0xFFFFFF, 0.20f * pls[i] * ea));
+            }
+        }
+
         boolean shuffle = Transport.shuffle();
         int repeat = Transport.repeat();
-        boolean hSh = near(mx, my, cx - 2 * dx, cy, 11);
-        boolean hPr = near(mx, my, cx - dx, cy, 11);
-        boolean hPl = near(mx, my, cx, cy, 11);
-        boolean hNx = near(mx, my, cx + dx, cy, 11);
-        boolean hRp = near(mx, my, cx + 2 * dx, cy, 11);
+        shufMix = Gfx.damp(shufMix, shuffle ? 1f : 0f, 14f, dt);
+        repMix = Gfx.damp(repMix, repeat > 0 ? 1f : 0f, 14f, dt);
+        playMix = Gfx.damp(playMix, Playback.isPlaying() ? 1f : 0f, 18f, dt);
 
-        int dim = Gfx.argb(0xFFFFFF, 0.70f * ea);
-        int lit = Gfx.argb(0xFFFFFF, ea);
         int green = Gfx.argb(Gfx.GREEN, ea);
-        Gfx.iconShuffle(g, cx - 2 * dx, cy, shuffle ? green : (hSh ? lit : dim));
-        if (shuffle) g.fill(cx - 2 * dx - 1, cy + 8, cx - 2 * dx + 1, cy + 10, green);
-        Gfx.iconPrev(g, cx - dx, cy, hPr ? lit : dim);
-        Gfx.fillCircle(g, cx, cy, 9, Gfx.argb(0xFFFFFF, (hPl ? 1f : 0.92f) * ea));
-        if (Playback.isPlaying()) Gfx.iconPause(g, cx, cy, Gfx.fade(0xFF000000, ea));
-        else Gfx.iconPlay(g, cx + 1, cy, Gfx.fade(0xFF000000, ea));
-        Gfx.iconNext(g, cx + dx, cy, hNx ? lit : dim);
-        Gfx.iconRepeat(g, cx + 2 * dx, cy, repeat == 2, repeat > 0 ? green : (hRp ? lit : dim));
-        if (repeat > 0) g.fill(cx + 2 * dx - 1, cy + 8, cx + 2 * dx + 1, cy + 10, green);
+        int shufC = Gfx.lerpArgb(Gfx.argb(0xFFFFFF, (0.62f + 0.38f * hov[0]) * ea), green, shufMix);
+        int prevC = Gfx.argb(0xFFFFFF, (0.62f + 0.38f * hov[1]) * ea);
+        int nextC = Gfx.argb(0xFFFFFF, (0.62f + 0.38f * hov[3]) * ea);
+        int repC = Gfx.lerpArgb(Gfx.argb(0xFFFFFF, (0.62f + 0.38f * hov[4]) * ea), green, repMix);
+        Gfx.iconShuffle(g, bxs[0], cy, shufC);
+        if (shufMix > 0.05f) g.fill(bxs[0] - 1, cy + 8, bxs[0] + 1, cy + 10, Gfx.fade(green, shufMix));
+        Gfx.iconPrev(g, bxs[1], cy, prevC);
+        Gfx.iconNext(g, bxs[3], cy, nextC);
+        Gfx.iconRepeat(g, bxs[4], cy, repeat == 2, repC);
+        if (repMix > 0.05f) g.fill(bxs[4] - 1, cy + 8, bxs[4] + 1, cy + 10, Gfx.fade(green, repMix));
 
-        if (ea >= 0.99f) {
+        // play / pause: the button grows a little under the mouse, the icons cross-fade
+        int pr = Math.round(9f + hov[2] * 1.2f - pls[2] * 1.5f);
+        Gfx.fillCircle(g, cx, cy, pr, Gfx.argb(0xFFFFFF, (0.92f + 0.08f * hov[2]) * ea));
+        float pa = ea * playMix;
+        float ia = ea * (1f - playMix);
+        if (pa > 0.03f) Gfx.iconPause(g, cx, cy, Gfx.argb(0x000000, pa));
+        if (ia > 0.03f) Gfx.iconPlay(g, cx + 1, cy, Gfx.argb(0x000000, ia));
+
+        if (clickable) {
             hitsOn = true;
-            hShuffleX = cx - 2 * dx;
-            hPrevX = cx - dx;
-            hPlayX = cx;
-            hNextX = cx + dx;
-            hRepeatX = cx + 2 * dx;
+            hShuffleX = bxs[0];
+            hPrevX = bxs[1];
+            hPlayX = bxs[2];
+            hNextX = bxs[3];
+            hRepeatX = bxs[4];
             hCtlY = cy;
             barX = bx0;
             barY = by;
@@ -270,13 +347,14 @@ public final class Island {
         }
     }
 
-    private static void drawTicker(GuiGraphics g, Font font, Song s, int tx, int y, int tw, int h, int glowRgb) {
+    private static void drawTicker(GuiGraphics g, Font font, Song s, int tx, int y, int tw, int h, float fa) {
         List<Song.Line> ls = s.lyrics;
         int n = tickCount;
         double pos = Playback.position() + Settings.I.syncOffset;
         int idx = indexAt(ls, pos);
 
         float center;
+        float sm = 0f;                                  // 0..1 while gliding from this line to the next
         if (idx < 0) {
             center = tickX[0] + tickW[0] / 2f;
         } else {
@@ -286,7 +364,7 @@ public final class Island {
                 float gk = (float) ((pos - (b - 0.3)) / 0.3);
                 if (gk > 0f) {
                     if (gk > 1f) gk = 1f;
-                    float sm = gk * gk * (3f - 2f * gk);
+                    sm = gk * gk * (3f - 2f * gk);
                     float nextC = tickX[idx + 1] + tickW[idx + 1] / 2f;
                     center += (nextC - center) * sm;
                 }
@@ -296,13 +374,22 @@ public final class Island {
         int cx0 = tx + tw / 2;
         int from = Math.max(0, idx - 5);
         int to = Math.min(n - 1, Math.max(idx, 0) + 6);
+        // the sub-pixel part of the scroll is applied through the pose, so the ticker glides smoothly
+        int ci = (int) Math.floor(center);
+        float cf = center - ci;
         g.enableScissor(tx, y + 17, tx + tw, y + h - 3);
+        g.pose().pushPose();
+        g.pose().translate(-cf, 0f, 0f);
         for (int i = from; i <= to; i++) {
-            int sx = cx0 + Math.round(tickX[i] - center);
-            if (sx > tx + tw || sx + tickW[i] < tx) continue;
-            int col = i == idx ? 0xFFFFFFFF : (i < idx ? 0x80FFFFFF : 0xB0B8C0FF);
-            g.drawString(font, ls.get(i).text, sx, y + 19, col, false);
+            int sx = cx0 + Math.round(tickX[i]) - ci;
+            if (sx > tx + tw + 1 || sx + tickW[i] < tx - 1) continue;
+            // line colours cross-fade with the glide, so the current line does not "pop" white
+            int base = i < idx ? 0x80FFFFFF : 0xB0B8C0FF;
+            float k = i == idx ? 1f - sm : (i == idx + 1 ? sm : 0f);
+            int col = Gfx.lerpArgb(base, 0xFFFFFFFF, k);
+            g.drawString(font, ls.get(i).text, sx, y + 19, Gfx.fade(col, fa), false);
         }
+        g.pose().popPose();
         g.disableScissor();
     }
 
@@ -318,10 +405,5 @@ public final class Island {
             }
         }
         return r;
-    }
-
-    /** Stadium (fully rounded) rectangle using 1px rows, no allocations. */
-    private static void fillPill(GuiGraphics g, int x, int y, int w, int h, int color) {
-        Gfx.fillPill(g, x, y, w, h, color);
     }
 }

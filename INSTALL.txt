@@ -1,7 +1,9 @@
-StolasLyrics update (island player, Now tab, drop animation, more lyric sites)
+StolasLyrics - UI update (smooth island, animated menu)
 
 1. Распакуй этот архив.
 2. На GitHub в репозитории: Add file -> Upload files.
-3. Перетащи в окно папку "src" целиком (она заменит старые файлы).
-4. Нажми Commit changes.
-5. Открой вкладку Actions, дождись зелёной галочки, скачай новый jar из Artifacts.
+3. Перетащи в окно папку "src" целиком (заменятся 4 файла: Gfx, Island, SettingsScreen, EffectPreview).
+4. Commit changes.
+5. Вкладка Actions -> дождись зелёной галочки -> скачай новый jar из Artifacts.
+
+Если сборка упала - открой лог Actions и пришли мне текст ошибки (первые строки с "error:").

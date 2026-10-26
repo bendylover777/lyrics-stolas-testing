@@ -55,12 +55,13 @@ public final class EffectPreview {
         caret = Song.styledComponent("|", fontId);
     }
 
-    private static void ring(GuiGraphics g, Font font, Component c, float x, float y, float r, float alpha, int rgb) {
+    /** Glow ring: 4 copies of the letter around its centre (start 0 = axes, 1 = diagonals) instead of 8. */
+    private static void ring(GuiGraphics g, Font font, Component c, float x, float y, float r, float alpha, int rgb, int start) {
         int a = (int) (alpha * 255f);
         if (a < 4) return;
         if (a > 255) a = 255;
         int color = (a << 24) | rgb;
-        for (int k = 0; k < 8; k++) {
+        for (int k = start & 1; k < 8; k += 2) {
             g.pose().pushPose();
             g.pose().translate(x + RX[k] * r, y + RY[k] * r, 0f);
             g.drawString(font, c, 0, 0, color, false);
@@ -76,6 +77,11 @@ public final class EffectPreview {
     }
 
     public static void render(GuiGraphics g, Font font, int x, int y, int w, int h) {
+        render(g, font, x, y, w, h, 1f, 0);
+    }
+
+    /** {@code sdy}: vertical offset of the pose the caller draws in (the scissor box does not follow the pose). */
+    public static void render(GuiGraphics g, Font font, int x, int y, int w, int h, float fade, int sdy) {
         Settings st = Settings.I;
         ensure(font, st.font);
         double rt = System.nanoTime() / 1e9;
@@ -85,15 +91,15 @@ public final class EffectPreview {
         int glowRgb = st.glowColor & 0xFFFFFF;
         int rgb = st.textColor & 0xFFFFFF;
 
-        g.fill(x, y, x + w, y + h, 0xA0050509);
-        g.renderOutline(x, y, w, h, (0x66 << 24) | glowRgb);
-        g.drawString(font, "preview: " + st.in().label + " > " + st.out().label, x + 4, y + 3, 0xFF6B7280, false);
+        Gfx.fillRound(g, x, y, w, h, 6, Gfx.argb(0x050509, 0.65f * fade));
+        Gfx.outlineRound(g, x, y, w, h, 6, Gfx.argb(glowRgb, 0.30f * fade));
+        Gfx.text(g, font, st.in().label + "  >  " + st.out().label, x + 8, y + 4, 0x8B8AA8, fade);
         if (cyc > 3.8) return;
 
         ST.reset();
         st.in().applyIn(ST, inP, (float) rt);
         if (outP > 0f) st.out().applyOut(ST, outP);
-        float alpha = ST.alpha * st.opacity;
+        float alpha = ST.alpha * st.opacity * fade;
         if (alpha < 0.03f) return;
 
         float k = 2.3f * ST.scale;
@@ -116,7 +122,7 @@ public final class EffectPreview {
         float waveAmp = ST.wave > 0f ? 1.6f : 0f;
         float gAmp = ST.glitch > 0.01f ? 1.1f * (0.4f + ST.glitch) : 0f;
 
-        g.enableScissor(x + 1, y + 1, x + w - 1, y + h - 1);
+        g.enableScissor(x + 2, y + 2 + sdy, x + w - 2, y + h - 2 + sdy);
         g.pose().pushPose();
         g.pose().translate(cx, cy, 0f);
         if (rot != 0f) g.pose().mulPose(Axis.ZP.rotationDegrees(rot));
@@ -126,8 +132,8 @@ public final class EffectPreview {
             int cMid = LyricsRenderer.shimmer(st.shimmer, rgb, glowRgb, rt, st.shimmerSpeed, n / 2);
             for (int i = 0; i < n; i++) {
                 float lx = bx + offs[i];
-                ring(g, font, comps[i], lx, -4.5f, spread * 2f, glowA * 0.10f, cMid);
-                ring(g, font, comps[i], lx, -4.5f, spread, glowA * 0.20f * pulse, cMid);
+                ring(g, font, comps[i], lx, -4.5f, spread * 2f, glowA * 0.10f, cMid, 0);
+                ring(g, font, comps[i], lx, -4.5f, spread, glowA * 0.20f * pulse, cMid, 1);
             }
         }
         for (int i = 0; i < visible; i++) {
@@ -153,8 +159,8 @@ public final class EffectPreview {
                 lx += (cw - scrW[gi]) / 2f;
                 col = LyricsRenderer.lerpRgb(col, 0x39FFB0, 0.55f);
             }
-            if (st.neon > 0.02f) ring(g, font, cc, lx, ly, neonR, alpha * 0.9f * st.neon * pulse * boost, col);
-            if (gk > 0.35f && st.glint > 0.05f) ring(g, font, cc, lx, ly, neonR * 3f, alpha * 0.3f * gk * st.glint, col);
+            if (st.neon > 0.02f) ring(g, font, cc, lx, ly, neonR, alpha * 0.9f * st.neon * pulse * boost, col, i);
+            if (gk > 0.35f && st.glint > 0.05f) ring(g, font, cc, lx, ly, neonR * 3f, alpha * 0.3f * gk * st.glint, col, i + 1);
             float mx = lx;
             if (gAmp > 0f) {
                 float jx = (float) Math.sin(rt * 47.0 + i * 12.9898) * gAmp;
