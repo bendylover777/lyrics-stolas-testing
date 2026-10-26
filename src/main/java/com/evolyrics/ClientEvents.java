@@ -17,6 +17,7 @@ import net.minecraftforge.client.event.RegisterClientCommandsEvent;
 import net.minecraftforge.client.event.RegisterGuiOverlaysEvent;
 import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
 import net.minecraftforge.client.event.RenderLevelStageEvent;
+import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -68,6 +69,18 @@ public final class ClientEvents {
             while (TOGGLE.consumeClick()) Transport.toggle();
             SystemBridge.tick();
             Playback.tick();
+            Transport.tick();
+        }
+
+        /** The island grows into a clickable player on top of every menu. */
+        @SubscribeEvent
+        public static void screenRender(ScreenEvent.Render.Post e) {
+            Island.renderOverScreen(e.getGuiGraphics(), e.getScreen(), e.getMouseX(), e.getMouseY());
+        }
+
+        @SubscribeEvent
+        public static void screenClick(ScreenEvent.MouseButtonPressed.Pre e) {
+            if (Island.click(e.getMouseX(), e.getMouseY(), e.getButton())) e.setCanceled(true);
         }
 
         @SubscribeEvent

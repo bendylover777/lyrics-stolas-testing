@@ -1,4 +1,4 @@
-StolasLyrics update (neon, tilt, marquee island, new menu, text in view)
+StolasLyrics update (island player, Now tab, drop animation, more lyric sites)
 
 1. Распакуй этот архив.
 2. На GitHub в репозитории: Add file -> Upload files.

@@ -14,16 +14,14 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 public class SettingsScreen extends Screen {
-    private static final String[] TABS = {"Lyrics", "Look", "Anim", "Font", "Music", "Songs"};
+    private static final String[] TABS = {"Lyrics", "Look", "Anim", "Font", "Music", "Now"};
     private static final String[] PRESET_NAMES = {"Ice", "Pink", "Violet", "Gold", "Mint", "Pure white"};
     private static final int[][] PRESETS = {
         {0xFFFFFF, 0x7FA8FF}, {0xFFFFFF, 0xFF7ACB}, {0xF2E8FF, 0xA855F7},
         {0xFFF3B0, 0xFFB020}, {0xE8FFE8, 0x4ADE80}, {0xFFFFFF, 0xFFFFFF}};
 
     private static int tab = 0;
-    private static int songPage = 0;
     private TimeSlider timeSlider;
-    private String pageInfo = "";
     private static int preset = 0;
     private static boolean switching = false;
     private static boolean skipSlide = false;
@@ -76,6 +74,7 @@ public class SettingsScreen extends Screen {
         left = width / 2 - colW - gap / 2;
         right = width / 2 + gap / 2;
         panelTop = Math.max(4, (height - 230) / 2);
+        if (height >= 330) panelTop = Math.max(panelTop, 76);   // room for the expanded island above the panel
         tabsY = panelTop + 56;
 
         int x2 = width / 2 + 168;
@@ -96,8 +95,8 @@ public class SettingsScreen extends Screen {
             case 1 -> initLook(s, cy, step, h);
             case 2 -> initAnim(s, cy, step, h);
             case 3 -> initFont(s, cy, step, h);
-            case 5 -> initSongs(s, cy, step, h);
-            default -> initMusic(s, cy, step, h);
+            case 4 -> initMusic(s, cy, step, h);
+            default -> { }   // "Now" tab is drawn by hand (see drawNow)
         }
         bottom = cy + step * 6 + 14;
     }
@@ -193,43 +192,6 @@ public class SettingsScreen extends Screen {
         add(toggle(right, cy + step * 5, colW, "Auto lyrics", () -> s.autoLyrics, v -> s.autoLyrics = v));
     }
 
-    /** Song list: click a song to play it (switches Source to Manual). */
-    private void initSongs(Settings s, int cy, int step, int h) {
-        List<String> ids = new ArrayList<>(SongLibrary.songs.keySet());
-        int perPage = 8;
-        int pages = Math.max(1, (ids.size() + perPage - 1) / perPage);
-        if (songPage >= pages) songPage = pages - 1;
-        if (songPage < 0) songPage = 0;
-        String curId = Playback.current == null ? "" : Playback.current.id;
-        for (int i = 0; i < perPage; i++) {
-            int idx = songPage * perPage + i;
-            if (idx >= ids.size()) break;
-            final String id = ids.get(idx);
-            String label = id.length() > 24 ? id.substring(0, 23) + "…" : id;
-            if (id.equals(curId)) label = "> " + label;
-            int x = (i % 2 == 0) ? left : right;
-            int y = cy + (i / 2) * step;
-            add(Button.builder(Component.literal(label), b -> {
-                Song song = SongLibrary.songs.get(id);
-                if (song == null) return;
-                s.source = 0;
-                s.lastSong = id;
-                Playback.play(song);
-                refresh();
-            }).bounds(x, y, colW, h).build());
-        }
-        int by = cy + step * 4;
-        add(Button.builder(Component.literal("<  Page"), b -> {
-            songPage = Math.max(0, songPage - 1);
-            refresh();
-        }).bounds(left, by, colW, h).build());
-        add(Button.builder(Component.literal("Page  >"), b -> {
-            songPage = Math.min(pages - 1, songPage + 1);
-            refresh();
-        }).bounds(right, by, colW, h).build());
-        pageInfo = "Page " + (songPage + 1) + " / " + pages + "   (" + ids.size() + " songs)";
-    }
-
     @Override
     public void tick() {
         super.tick();
@@ -270,10 +232,6 @@ public class SettingsScreen extends Screen {
         }).bounds(x, y, w, 20).build();
     }
 
-    private static int step5() {
-        return 22 * 5 + 2;
-    }
-
     private static float ease(float p) {
         if (p < 0f) p = 0f;
         if (p > 1f) p = 1f;
@@ -294,7 +252,7 @@ public class SettingsScreen extends Screen {
         renderBackground(g);
         Settings st = Settings.I;
         long now = System.nanoTime();
-        float pAnim = ease((now - panelStart) / 1e9f / 0.28f);
+        float pAnim = ease((now - panelStart) / 1e9f / 0.15f);
         float tAnim = ease((now - tabStart) / 1e9f / 0.22f);
         double secs = now / 1e9;
         int glow = st.glowColor & 0xFFFFFF;
@@ -302,10 +260,9 @@ public class SettingsScreen extends Screen {
         int bgA = (int) (0xD0 * pAnim);
 
         g.pose().pushPose();
-        float sc = 0.9f + 0.1f * pAnim;
-        g.pose().translate(width / 2f, height / 2f, 0f);
-        g.pose().scale(sc, sc, 1f);
-        g.pose().translate(-width / 2f, -height / 2f, 0f);
+        // the panel drops in from above the screen and bounces a little
+        float drop = Gfx.bounce((now - panelStart) / 1e9f / 0.65f);
+        g.pose().translate(0f, -(bottom + 12) * (1f - drop), 0f);
 
         int x1 = width / 2 - 168, x2 = width / 2 + 168;
         int y1 = panelTop;
@@ -343,12 +300,157 @@ public class SettingsScreen extends Screen {
         } else if (tab == 4) {
             g.drawCenteredString(font, "Keys: Controls > Player (menu, next, previous, pause)", width / 2, contentTop + 132, 0xFF9A8CC0);
         } else if (tab == 5) {
-            g.drawCenteredString(font, pageInfo, width / 2, contentTop + step5(), 0xFF9A8CC0);
-            g.drawCenteredString(font, "Click a song to play it (Source switches to Manual)", width / 2, contentTop + step5() + 12, 0xFF9A8CC0);
+            drawNow(g, now, mx, my, glow);
         }
         g.pose().popPose();
 
         g.pose().popPose();
+    }
+
+    // ------------------------------------------------------------------ "Now" tab: previous / playing / next
+
+    /** x, y, w, h of the three ovals: 0 = previous, 1 = now playing, 2 = next. */
+    private int[] pill(int i) {
+        int w = colW * 2 + 8;
+        return switch (i) {
+            case 0 -> new int[]{left, contentTop, w, 28};
+            case 1 -> new int[]{left, contentTop + 33, w, 42};
+            default -> new int[]{left, contentTop + 80, w, 28};
+        };
+    }
+
+    private int pillAt(double mx, double my) {
+        for (int i = 0; i < 3; i++) {
+            int[] r = pill(i);
+            if (mx >= r[0] && mx < r[0] + r[2] && my >= r[1] && my < r[1] + r[3]) return i;
+        }
+        return -1;
+    }
+
+    @Override
+    public boolean mouseClicked(double mx, double my, int button) {
+        if (tab == 5 && button == 0) {
+            int hit = pillAt(mx, my);
+            if (hit == 0) {
+                Transport.prev();
+                return true;
+            }
+            if (hit == 1) {
+                Transport.toggle();
+                return true;
+            }
+            if (hit == 2) {
+                Transport.next();
+                return true;
+            }
+        }
+        return super.mouseClicked(mx, my, button);
+    }
+
+    private String clip(String s, int max) {
+        if (max <= 0) return "";
+        return font.width(s) <= max ? s : font.plainSubstrByWidth(s, max - font.width("...")) + "...";
+    }
+
+    private static String nameOf(Song s) {
+        if (s == null) return "";
+        return s.title == null || s.title.isBlank() ? s.id : s.title;
+    }
+
+    private static String initial(Song s) {
+        String t = nameOf(s).trim();
+        if (t.isEmpty()) return "?";
+        return new String(Character.toChars(t.codePointAt(0))).toUpperCase(Locale.ROOT);
+    }
+
+    private void drawNow(GuiGraphics g, long now, int mx, int my, int glow) {
+        float since = (now - tabStart) / 1e9f;
+        double secs = now / 1e9;
+        boolean remote = Transport.isRemote();
+        String app = SystemBridge.app.isEmpty() ? "your player" : SystemBridge.app;
+        Song prev = Transport.peek(-1);
+        Song cur = Playback.current;
+        Song next = Transport.peek(1);
+        int hover = pillAt(mx, my);
+
+        for (int i = 0; i < 3; i++) {
+            int[] r = pill(i);
+            int order = i == 1 ? 0 : (i == 0 ? 1 : 2);          // now playing drops first
+            float p = (since - 0.09f * order) / 0.5f;
+            float a = Gfx.easeOut(p * 2f);
+            if (a < 0.02f) continue;
+            int dy = Math.round(-26f * (1f - Gfx.bounce(p)));
+            if (i == 0) {
+                drawPill(g, r[0], r[1] + dy, r[2], r[3], "PREVIOUS", prev,
+                    remote ? "No history yet" : "Nothing here", false, hover == 0, a, glow, secs);
+            } else if (i == 1) {
+                drawPill(g, r[0], r[1] + dy, r[2], r[3], Playback.isPlaying() ? "NOW PLAYING" : "PAUSED", cur,
+                    "Nothing playing", true, hover == 1, a, glow, secs);
+            } else {
+                drawPill(g, r[0], r[1] + dy, r[2], r[3], "NEXT", next,
+                    remote ? "Chosen by " + app : "Nothing here", false, hover == 2, a, glow, secs);
+            }
+        }
+        int hy = contentTop + 114;
+        g.drawCenteredString(font, remote ? "Click Previous / Next to switch the track in " + app
+            : "Click Previous / Next to jump to that song", width / 2, hy, 0xFF9A8CC0);
+        g.drawCenteredString(font, "Shuffle, repeat and the time bar are on the island", width / 2, hy + 10, 0xFF9A8CC0);
+    }
+
+    private void drawPill(GuiGraphics g, int x, int y, int w, int h, String label, Song song, String empty,
+                          boolean big, boolean hover, float a, int glow, double secs) {
+        int r = h / 2;
+        float pulse = big ? (float) (Math.sin(secs * 2.4) * 0.5 + 0.5) : 0f;
+        float halo = big ? 0.20f + 0.16f * pulse : (hover ? 0.30f : 0.10f);
+        Gfx.fillRound(g, x - 2, y - 2, w + 4, h + 4, r + 2, Gfx.argb(glow, halo * a));
+        Gfx.fillRound(g, x, y, w, h, r, Gfx.fade(0xF0120A22, a));
+
+        // round "cover" with the first letter
+        int dr = r - 4;
+        int dcx = x + r;
+        int dcy = y + h / 2;
+        Gfx.fillCircle(g, dcx, dcy, dr, Gfx.argb(glow, (big ? 0.85f : 0.40f) * a));
+        g.drawCenteredString(font, song == null ? "-" : initial(song), dcx, dcy - 4, Gfx.argb(0xFFFFFF, a));
+
+        int tx = x + h + 2;
+        int maxW = x + w - r - 6 - tx;
+        g.pose().pushPose();
+        g.pose().translate(tx, y + (big ? 6 : 4), 0f);
+        g.pose().scale(0.75f, 0.75f, 1f);
+        g.drawString(font, label, 0, 0, Gfx.argb(big ? glow : 0xB8C0FF, 0.9f * a), false);
+        g.pose().popPose();
+
+        if (song == null) {
+            g.drawString(font, clip(empty, maxW), tx, y + (big ? 17 : 13), Gfx.argb(0x9A8CC0, a), false);
+            return;
+        }
+        String title = clip(nameOf(song), maxW);
+        int ty = y + (big ? 15 : 12);
+        g.drawString(font, title, tx, ty, Gfx.argb(0xFFFFFF, a), false);
+        String artist = song.artist == null ? "" : song.artist;
+        if (!artist.isBlank()) {
+            if (big) {
+                g.drawString(font, clip(artist, maxW), tx, ty + 10, Gfx.argb(0xB8C0FF, 0.85f * a), false);
+            } else {
+                int used = font.width(title) + 8;
+                if (maxW - used > 24) g.drawString(font, clip(artist, maxW - used), tx + used, ty, Gfx.argb(0xB8C0FF, 0.7f * a), false);
+            }
+        }
+        if (big) {
+            // time + bar
+            double len = Transport.length();
+            double pos = Playback.position();
+            float frac = len > 0 ? (float) Math.min(1.0, Math.max(0.0, pos / len)) : 0f;
+            String time = TimeSlider.fmt(pos) + " / " + (len > 0 ? TimeSlider.fmt(len) : "--:--");
+            g.pose().pushPose();
+            g.pose().translate(x + w - r - 6 - font.width(time) * 0.75f, y + 6, 0f);
+            g.pose().scale(0.75f, 0.75f, 1f);
+            g.drawString(font, time, 0, 0, Gfx.argb(0xB8C0FF, 0.9f * a), false);
+            g.pose().popPose();
+            int bw = Math.max(10, maxW);
+            Gfx.fillRound(g, tx, y + h - 8, bw, 2, 1, Gfx.argb(0xFFFFFF, 0.22f * a));
+            Gfx.fillRound(g, tx, y + h - 8, Math.max(2, Math.round(bw * frac)), 2, 1, Gfx.argb(glow, a));
+        }
     }
 
     @Override

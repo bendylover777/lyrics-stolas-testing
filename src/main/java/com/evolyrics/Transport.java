@@ -1,15 +1,28 @@
 package com.evolyrics;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
-/** Player controls: previous / next / play-pause / seek. Controls the real player when the built-in bridge is active. */
+/**
+ * Player controls: previous / next / play-pause / seek / shuffle / repeat.
+ * Controls the real player when the built-in bridge is active, otherwise the local song list.
+ */
 public final class Transport {
+    private static boolean shuffleLocal;
+    private static int repeatLocal;               // 0 off, 1 all, 2 one
+    private static List<String> order = new ArrayList<>();
+
     private Transport() {
     }
 
     private static boolean remote() {
         return Settings.I.source == 1 && SystemBridge.active();
+    }
+
+    /** True when the real player (Spotify...) is in charge, so the next song is not known to us. */
+    public static boolean isRemote() {
+        return remote();
     }
 
     public static void next() {
@@ -26,6 +39,36 @@ public final class Transport {
         if (remote()) SystemBridge.control("toggle", 0);
         Playback.toggle();
     }
+
+    // ------------------------------------------------------------------ shuffle / repeat
+
+    public static boolean shuffle() {
+        return remote() ? SystemBridge.shuffle : shuffleLocal;
+    }
+
+    /** 0 = off, 1 = repeat all, 2 = repeat one. */
+    public static int repeat() {
+        return remote() ? SystemBridge.repeat : repeatLocal;
+    }
+
+    public static void toggleShuffle() {
+        if (remote()) {
+            SystemBridge.setShuffle(!SystemBridge.shuffle);
+        } else {
+            shuffleLocal = !shuffleLocal;
+            order = new ArrayList<>();
+        }
+    }
+
+    public static void cycleRepeat() {
+        if (remote()) {
+            SystemBridge.setRepeat((SystemBridge.repeat + 1) % 3);
+        } else {
+            repeatLocal = (repeatLocal + 1) % 3;
+        }
+    }
+
+    // ------------------------------------------------------------------ seek / length
 
     /** Local jump (used while dragging the slider). */
     public static void seekLocal(double sec) {
@@ -48,14 +91,46 @@ public final class Transport {
         return end > 0 ? end + 3.0 : 0.0;
     }
 
-    private static void step(int d) {
-        List<String> ids = new ArrayList<>(SongLibrary.songs.keySet());
-        if (ids.isEmpty()) return;
+    // ------------------------------------------------------------------ previous / next song (for the menu)
+
+    private static List<String> ids() {
+        List<String> base = new ArrayList<>(SongLibrary.songs.keySet());
+        if (!shuffleLocal) return base;
+        if (order.size() != base.size() || !order.containsAll(base)) {
+            order = new ArrayList<>(base);
+            Collections.shuffle(order);
+        }
+        return order;
+    }
+
+    /**
+     * The song before (d = -1) or after (d = +1) the current one, or null when it is not known.
+     * With a real player the next song is only known after Previous was pressed (Spotify does not share its queue).
+     */
+    public static Song peek(int d) {
+        if (remote()) return d < 0 ? SystemBridge.historyPrev() : SystemBridge.historyNext();
+        List<String> ids = ids();
+        if (ids.isEmpty()) return null;
         int i = Playback.current == null ? -1 : ids.indexOf(Playback.current.id);
-        int n = ids.size();
-        int j = i < 0 ? (d > 0 ? 0 : n - 1) : Math.floorMod(i + d, n);
-        Song next = SongLibrary.songs.get(ids.get(j));
+        if (i < 0) return SongLibrary.songs.get(ids.get(d > 0 ? 0 : ids.size() - 1));
+        if (ids.size() < 2) return null;
+        return SongLibrary.songs.get(ids.get(Math.floorMod(i + d, ids.size())));
+    }
+
+    private static void step(int d) {
+        Song next = peek(d);
+        if (next == null) return;
         Settings.I.lastSong = next.id;
         Playback.play(next);
+    }
+
+    /** Every client tick: shuffle / repeat for the local (manual) song list. */
+    public static void tick() {
+        if (remote() || Playback.current == null || !Playback.isPlaying()) return;
+        if (repeatLocal == 0 && !shuffleLocal) return;
+        double len = length();
+        if (len <= 0 || Playback.position() < len) return;
+        if (repeatLocal == 2 || ids().size() < 2) Playback.play(Playback.current);
+        else step(1);
     }
 }

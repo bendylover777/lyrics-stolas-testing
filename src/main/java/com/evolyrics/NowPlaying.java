@@ -26,7 +26,7 @@ public final class NowPlaying {
         /** Last problem (permission, missing PowerShell...), or null. */
         String error();
 
-        /** Control the real player: "next", "prev", "toggle" or "seek" (arg = seconds). Non-blocking. */
+        /** Control the real player: "next", "prev", "toggle", "seek" (arg = seconds), "shuffle" (arg 0/1) or "repeat" (arg 0 off, 1 all, 2 one). Non-blocking. */
         default void command(String cmd, double arg) {
         }
     }
@@ -124,6 +124,8 @@ public final class NowPlaying {
             else if (cmd.equals("prev")) verb = "previous track";
             else if (cmd.equals("toggle")) verb = "playpause";
             else if (cmd.equals("seek")) verb = "set player position to " + String.format(Locale.ROOT, "%.3f", arg);
+            else if (cmd.equals("shuffle")) verb = "set shuffling to " + (arg > 0.5 ? "true" : "false");
+            else if (cmd.equals("repeat")) verb = "set repeating to " + (arg > 0.5 ? "true" : "false");
             else return;
             Thread t = new Thread(() -> {
                 try {
@@ -248,7 +250,12 @@ public final class NowPlaying {
               $len = $tl.EndTime.TotalSeconds
               $flag = '0'
               if ($playing) { $flag = '1' }
-              $line = 'P' + $tab + $flag + $tab + (Clean $props.Title) + $tab + (Clean $props.Artist) + $tab + $pos.ToString('0.000', $inv) + $tab + $len.ToString('0.000', $inv) + $tab + (Clean $session.SourceAppUserModelId)
+              $sh = '0'
+              if ($info.IsShuffleActive -eq $true) { $sh = '1' }
+              $rp = '0'
+              $rm = [string]$info.AutoRepeatMode
+              if ($rm -eq 'List') { $rp = '1' } elseif ($rm -eq 'Track') { $rp = '2' }
+              $line = 'P' + $tab + $flag + $tab + (Clean $props.Title) + $tab + (Clean $props.Artist) + $tab + $pos.ToString('0.000', $inv) + $tab + $len.ToString('0.000', $inv) + $tab + (Clean $session.SourceAppUserModelId) + $tab + $sh + $tab + $rp
             }
           } catch {
             $line = 'E' + $tab + (Clean $_.Exception.Message)
@@ -269,6 +276,7 @@ public final class NowPlaying {
           return $task.Result
         }
         [void][Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]
+        try { [void][Windows.Media.MediaPlaybackAutoRepeatMode, Windows.Media, ContentType = WindowsRuntime] } catch { }
         $mgrType = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]
         $mgr = Await ($mgrType::RequestAsync()) $mgrType
         $session = $null
@@ -280,6 +288,13 @@ public final class NowPlaying {
         elseif ($cmd -eq 'prev') { $null = Await ($session.TrySkipPreviousAsync()) ([bool]) }
         elseif ($cmd -eq 'toggle') { $null = Await ($session.TryTogglePlayPauseAsync()) ([bool]) }
         elseif ($cmd -eq 'seek') { $null = Await ($session.TryChangePlaybackPositionAsync([int64](__ARG__ * 10000000))) ([bool]) }
+        elseif ($cmd -eq 'shuffle') { $null = Await ($session.TryChangeShuffleActiveAsync([bool](__ARG__))) ([bool]) }
+        elseif ($cmd -eq 'repeat') {
+          $mode = [Windows.Media.MediaPlaybackAutoRepeatMode]::None
+          if (__ARG__ -eq 1) { $mode = [Windows.Media.MediaPlaybackAutoRepeatMode]::List }
+          elseif (__ARG__ -eq 2) { $mode = [Windows.Media.MediaPlaybackAutoRepeatMode]::Track }
+          $null = Await ($session.TryChangeAutoRepeatModeAsync($mode)) ([bool])
+        }
         """;
 
     static String winAppName(String id) {
@@ -317,7 +332,14 @@ public final class NowPlaying {
         }
         String title = clean(p[2]);
         if (title.isEmpty() || isAd(title)) return null;
-        return new PlayerInfo(title, clean(p[3]), p[1].equals("1"), pos, len, winAppName(p[6]));
+        boolean hasModes = p.length >= 9;
+        boolean shuffle = hasModes && p[7].trim().equals("1");
+        int repeat = 0;
+        if (hasModes) {
+            String r = p[8].trim();
+            repeat = r.equals("1") ? 1 : r.equals("2") ? 2 : 0;
+        }
+        return new PlayerInfo(title, clean(p[3]), p[1].equals("1"), pos, len, winAppName(p[6]), hasModes, shuffle, repeat);
     }
 
     static final class WinPoller implements Poller {
@@ -360,7 +382,8 @@ public final class NowPlaying {
 
         @Override
         public void command(String cmd, double arg) {
-            if (!(cmd.equals("next") || cmd.equals("prev") || cmd.equals("toggle") || cmd.equals("seek"))) return;
+            if (!(cmd.equals("next") || cmd.equals("prev") || cmd.equals("toggle") || cmd.equals("seek")
+                || cmd.equals("shuffle") || cmd.equals("repeat"))) return;
             final String script = WIN_CTRL.replace("__CMD__", cmd).replace("__ARG__", String.format(Locale.ROOT, "%.3f", arg));
             Thread t = new Thread(() -> {
                 try {
